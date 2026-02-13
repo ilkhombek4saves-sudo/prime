@@ -12,6 +12,7 @@ class PairingRequestIn(BaseModel):
     requested_by_user_id: int | None = None
     request_meta: dict = {}
     expires_in_minutes: int = 30
+    code: str | None = None
 
 
 class PairingRequestOut(BaseModel):
@@ -21,6 +22,7 @@ class PairingRequestOut(BaseModel):
     account_id: str | None
     peer: str | None
     requested_by_user_id: int | None
+    code: str | None
     status: str
     request_meta: dict
     created_at: datetime
@@ -33,6 +35,11 @@ class PairingRequestOut(BaseModel):
 
 
 class PairingDecisionIn(BaseModel):
+    paired_user_id: int | None = None
+
+
+class PairingApproveByCodeIn(BaseModel):
+    code: str
     paired_user_id: int | None = None
 
 

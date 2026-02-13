@@ -3,7 +3,7 @@ providers:
 - name: glm_default
   type: GLM
   api_key: ${ZAI_API_KEY}
-  api_base: https://api.z.ai/v1/
+  api_base: https://api.z.ai/api/paas/v4
   default_model: glm-4.7
   models:
     glm-4.7:
@@ -43,6 +43,51 @@ providers:
   rate_limits:
     rpm: 300
     tpm: 120000
+  active: true
+
+- name: deepseek_default
+  type: DeepSeek
+  api_key: ${DEEPSEEK_API_KEY}
+  api_base: https://api.deepseek.com/v1/
+  default_model: deepseek-chat
+  models:
+    deepseek-chat:
+      max_tokens: 4096
+      cost_per_1m_input: 0.2
+      cost_per_1m_output: 0.8
+  thinking_enabled: false
+  rate_limits:
+    rpm: 300
+    tpm: 120000
+  active: true
+
+- name: kimi_default
+  type: Kimi
+  api_key: ${KIMI_API_KEY}
+  api_base: https://api.moonshot.cn/v1/
+  default_model: kimi-k2
+  models:
+    kimi-k2:
+      max_tokens: 4096
+      cost_per_1m_input: 0.6
+      cost_per_1m_output: 2.0
+  thinking_enabled: false
+  rate_limits:
+    rpm: 300
+    tpm: 120000
+  active: true
+
+- name: ollama_default
+  type: Ollama
+  # For Docker deployments, use host.docker.internal (see docker-compose extra_hosts).
+  api_base: ${OLLAMA_API_BASE:-http://host.docker.internal:11434/v1}
+  default_model: ${OLLAMA_MODEL:-llama3.2}
+  models:
+    llama3.2:
+      max_tokens: 4096
+      cost_per_1m_input: 0.0
+      cost_per_1m_output: 0.0
+  thinking_enabled: false
   active: true
 
 - name: shell_default

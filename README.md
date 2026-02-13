@@ -1,6 +1,48 @@
-# MultiBot Aggregator
+# Prime — AI Agent Platform
 
-Multi-channel bot aggregator with provider/plugin orchestration and admin SPA.
+Multi-channel bot aggregator with provider/plugin orchestration. Inspired by OpenClaw.
+
+## 🚀 Two Modes
+
+### 1. Prime Lite (Recommended for Personal Use)
+**OpenClaw-like experience**: single binary, SQLite, no Docker.
+
+```bash
+./install-lite.sh              # Install
+prime init                     # Initialize
+prime serve                    # Start server
+prime agent "Hello"            # Chat with LLM
+```
+
+**Features:**
+- SQLite database (zero-config)
+- Built-in UI (no build step)
+- Local Ollama support
+- Single CLI: `prime`
+- Systemd/Launchd daemon
+
+See [LITE_MODE.md](LITE_MODE.md) for details.
+
+### 2. Prime Full (Enterprise/Self-hosted)
+**Microservices**: Docker Compose, PostgreSQL, React SPA.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+**Features:**
+- PostgreSQL database
+- React + MUI frontend
+- Multiple channels (Telegram, Discord, WebChat)
+- Horizontal scaling ready
+
+---
+
+## Stack
+- Backend: FastAPI, SQLAlchemy, PostgreSQL/SQLite
+- Frontend: React + MUI (Full) / Built-in (Lite)
+- Infra: Docker Compose (Full) / Python native (Lite)
 
 ## Stack
 - Backend: FastAPI, SQLAlchemy, PostgreSQL
@@ -37,8 +79,8 @@ prime status
 prime onboard
 prime shell
 prime gateway status
-prime gateway status --watch
-prime gateway logs
+prime gateway health
+prime gateway call status --json
 prime channels list
 prime dashboard --open
 prime auth login
@@ -131,6 +173,7 @@ prime channels verify
 - `APP_PUBLIC_URL`
 - `TELEGRAM_BOT_TOKENS`
 - Provider keys: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `QWEN_API_KEY`, `KIMI_API_KEY`, `ZAI_API_KEY`
+- Local Ollama (optional): `OLLAMA_API_BASE` (e.g. `http://host.docker.internal:11434/v1`), `OLLAMA_MODEL` (e.g. `llama3.2`)
 - Optional S3/R2: `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
 
 ## Config files

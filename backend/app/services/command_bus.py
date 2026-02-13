@@ -6,6 +6,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.persistence.models import Agent, Plugin, Provider, Task, TaskStatus, User
+from app.config.settings import get_settings
+from app.services.config_service import config_hash, config_schema, load_config
 from app.schemas.task import TaskIn
 from app.services.binding_resolver import BindingResolver
 from app.services.dm_policy import DMPolicyService
@@ -19,10 +21,29 @@ class CommandBus:
         self.db = db
 
     def dispatch(self, method: str, params: dict, user_claims: dict) -> dict:
-        if method == "health.get":
+        if method in ("health.get", "health"):
             return {
                 "status": "ok",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        if method == "status":
+            settings = get_settings()
+            return {
+                "status": "ok",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": settings.app_version,
+            }
+
+        if method == "config.get":
+            return {
+                "hash": config_hash("config"),
+                "config": load_config("config"),
+            }
+
+        if method == "config.schema":
+            return {
+                "schema": config_schema(),
             }
 
         if method == "tasks.list":

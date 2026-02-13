@@ -372,6 +372,7 @@ class PairingRequest(Base):
     account_id: Mapped[str | None] = mapped_column(String(128))
     peer: Mapped[str | None] = mapped_column(String(128))
     requested_by_user_id: Mapped[int | None] = mapped_column(Integer)
+    code: Mapped[str | None] = mapped_column(String(16), unique=True)
     status: Mapped[PairingStatus] = mapped_column(Enum(PairingStatus), default=PairingStatus.pending)
     request_meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -490,3 +491,72 @@ Index("ix_pairing_requests_device_status", PairingRequest.device_id, PairingRequ
 Index("ix_paired_devices_channel_peer", PairedDevice.channel, PairedDevice.account_id, PairedDevice.peer)
 Index("ix_document_chunks_kb", DocumentChunk.knowledge_base_id, DocumentChunk.chunk_index)
 Index("ix_documents_kb_status", Document.knowledge_base_id, Document.status)
+
+
+class UserMemory(Base):
+    __tablename__ = "user_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True)
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(64), default="fact")
+    confidence: Mapped[float] = mapped_column(default=1.0)
+    source_session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class CostRecord(Base):
+    __tablename__ = "cost_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True)
+    provider_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("providers.id"), nullable=True)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=True)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(default=0.0)
+    channel: Mapped[str] = mapped_column(String(64), default="telegram")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class WebhookEndpoint(Base):
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    events: Mapped[list[str]] = mapped_column(ARRAY(String(64)), default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+Index("ix_user_memories_user_agent", UserMemory.user_id, UserMemory.agent_id)
+Index("ix_cost_records_created", CostRecord.created_at, CostRecord.org_id)
+Index("ix_cost_records_agent", CostRecord.agent_id, CostRecord.created_at)
+Index("ix_audit_logs_action", AuditLog.action, AuditLog.created_at)

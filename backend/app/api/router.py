@@ -17,6 +17,8 @@ from app.api import (
     users,
     ws,
 )
+from app.gateway.webchat import router as webchat_router
+from app.api.analytics import router as analytics_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -35,3 +37,5 @@ api_router.include_router(settings.router)
 api_router.include_router(knowledge_bases.router)
 api_router.include_router(organizations.router)
 api_router.include_router(ws.router)
+api_router.include_router(webchat_router)
+api_router.include_router(analytics_router)

@@ -9,9 +9,13 @@ from app.api.router import api_router
 from app.config.settings import get_settings
 from app.logging.setup import configure_logging
 from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.proxy_trust import TrustedProxyMiddleware
 from app.middleware.request_context import RequestContextMiddleware
 from app.monitoring.metrics import REQUEST_COUNT, REQUEST_LATENCY
 from app.persistence.migrations import run_migrations
+from app.services.config_sync import sync_config_to_db
+from app.services.config_watch import ConfigWatcher
+from os import getenv
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +35,30 @@ async def lifespan(app: FastAPI):
         run_migrations()
     except Exception as exc:  # pragma: no cover
         logger.error("DB migration failed — running in degraded mode: %s", exc, exc_info=True)
+
+    # Sync config to DB (best-effort)
+    try:
+        sync_config_to_db()
+    except Exception as exc:  # pragma: no cover
+        logger.error("Config sync failed: %s", exc, exc_info=True)
+
+    # Acquire gateway lock (single instance safety)
+    lock_file = None
+    settings = get_settings()
+    try:
+        from pathlib import Path
+
+        lock_path = Path(settings.gateway_lock_path)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("w")
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except Exception as exc:
+            raise RuntimeError(f"Gateway lock already held: {lock_path}") from exc
+    except Exception as exc:  # pragma: no cover
+        logger.error("Gateway lock failed: %s", exc, exc_info=True)
 
     # Start background worker (task execution + document indexing)
     worker = None
@@ -55,7 +83,43 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # pragma: no cover
             logger.error("Telegram gateway failed to start: %s", exc, exc_info=True)
 
+    # Start Discord gateway if configured
+    discord_gateway = None
+    discord_configs_raw = getenv("DISCORD_BOT_CONFIGS", "").strip()
+    if discord_configs_raw:
+        try:
+            import json as _json
+            from app.gateway.discord import build_discord_gateway
+            discord_configs = _json.loads(discord_configs_raw)
+            discord_gateway = build_discord_gateway(discord_configs)
+            await discord_gateway.start()
+            logger.info("Discord gateway started")
+        except Exception as exc:
+            logger.error("Discord gateway failed to start: %s", exc, exc_info=True)
+
+    # Config hot-reload
+    config_watcher = None
+    if settings.config_watch_enabled:
+        try:
+            config_watcher = ConfigWatcher(interval_seconds=settings.config_watch_interval_seconds)
+            await config_watcher.start()
+            logger.info("Config watcher started")
+        except Exception as exc:  # pragma: no cover
+            logger.error("Config watcher failed to start: %s", exc, exc_info=True)
+
     yield
+
+    if config_watcher is not None:
+        try:
+            await config_watcher.stop()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Config watcher stop error: %s", exc)
+
+    if discord_gateway is not None:
+        try:
+            await discord_gateway.stop()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Discord gateway stop error: %s", exc)
 
     if tg_gateway is not None:
         try:
@@ -68,6 +132,12 @@ async def lifespan(app: FastAPI):
             await worker.stop()
         except Exception as exc:  # pragma: no cover
             logger.warning("Worker stop error: %s", exc)
+
+    if lock_file is not None:
+        try:
+            lock_file.close()
+        except Exception:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -92,6 +162,7 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(TrustedProxyMiddleware)
     app.add_middleware(RateLimitMiddleware)
 
     @app.middleware("http")

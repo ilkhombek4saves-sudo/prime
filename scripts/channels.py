@@ -5,6 +5,8 @@ import argparse
 import json
 import os
 import re
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -16,12 +18,32 @@ BOTS_CONFIG = ROOT / "config" / "bots.yaml"
 API_HEALTH_URL = os.getenv("PRIME_API_URL", "http://localhost:8000").rstrip("/") + "/api/healthz"
 
 TELEGRAM_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
+LLM_PROVIDER_TYPES = {
+    "OpenAI",
+    "Anthropic",
+    "DeepSeek",
+    "Mistral",
+    "Gemini",
+    "Kimi",
+    "Qwen",
+    "GLM",
+    "Ollama",
+}
 
 R = "\033[0m"
 GRN = "\033[92m"
 YLW = "\033[93m"
 RED = "\033[91m"
 BLD = "\033[1m"
+
+
+def disable_color() -> None:
+    global R, GRN, YLW, RED, BLD
+    R = ""
+    GRN = ""
+    YLW = ""
+    RED = ""
+    BLD = ""
 
 
 def ok(msg: str) -> None:
@@ -201,6 +223,216 @@ def telegram_get_me(token: str, timeout: float = 6.0) -> tuple[bool, str]:
     return True, str(label)
 
 
+def _extract_json_line(raw: str) -> dict[str, Any] | None:
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _backend_runtime_snapshot(timeout: float = 12.0) -> tuple[bool, dict[str, Any] | str]:
+    script = r"""
+import json
+import sys
+sys.path.insert(0, "/app")
+from app.persistence.database import SessionLocal
+from app.persistence.models import Agent, Binding, Bot, PairingRequest, PairingStatus, Provider
+
+try:
+    with SessionLocal() as db:
+        bots = db.query(Bot).all()
+        bindings = db.query(Binding).filter(Binding.channel == "telegram", Binding.active.is_(True)).all()
+        agent_ids = {b.agent_id for b in bindings}
+
+        data_bots = []
+        for b in bots:
+            data_bots.append({
+                "id": str(b.id),
+                "name": b.name,
+                "active": bool(b.active),
+                "channels": b.channels or [],
+            })
+
+        data_bindings = []
+        for b in bindings:
+            data_bindings.append({
+                "id": str(b.id),
+                "bot_id": str(b.bot_id),
+                "agent_id": str(b.agent_id),
+                "active": bool(b.active),
+                "account_id": b.account_id,
+                "peer": b.peer,
+            })
+
+        data_agents = []
+        for aid in agent_ids:
+            a = db.get(Agent, aid)
+            if not a:
+                continue
+            provider = db.get(Provider, a.default_provider_id) if a.default_provider_id else None
+            ptype = str(getattr(provider.type, "value", provider.type)) if provider else None
+            cfg = dict(provider.config or {}) if provider else {}
+            requires_key = bool(ptype in {"OpenAI", "Anthropic", "DeepSeek", "Mistral", "Gemini", "Kimi", "Qwen", "GLM"})
+            has_key = bool(cfg.get("api_key")) if requires_key else True
+            data_agents.append({
+                "id": str(a.id),
+                "name": a.name,
+                "active": bool(a.active),
+                "dm_policy": str(a.dm_policy),
+                "provider_name": provider.name if provider else None,
+                "provider_type": ptype,
+                "provider_active": bool(provider.active) if provider else False,
+                "provider_requires_key": requires_key,
+                "provider_has_api_key": has_key,
+            })
+
+        pending_pairings = db.query(PairingRequest).filter(PairingRequest.status == PairingStatus.pending).count()
+
+        print(json.dumps({
+            "ok": True,
+            "bots": data_bots,
+            "bindings": data_bindings,
+            "agents": data_agents,
+            "pending_pairings": int(pending_pairings),
+        }))
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": str(exc)}))
+"""
+    cmd = [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "backend",
+        "python",
+        "-c",
+        script,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, float(timeout)),
+            check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+
+    payload = _extract_json_line(result.stdout or "")
+    if payload is not None:
+        if payload.get("ok"):
+            return True, payload
+        return False, str(payload.get("error") or "runtime snapshot failed")
+
+    text = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+    return False, text or "runtime snapshot failed"
+
+
+def _backend_live_dry_run(timeout: float = 45.0) -> tuple[bool, dict[str, Any] | str]:
+    script = r"""
+import json
+import sys
+sys.path.insert(0, "/app")
+from app.persistence.database import SessionLocal
+from app.persistence.models import Agent, Binding, Provider
+from app.services.agent_runner import AgentRunner
+
+try:
+    with SessionLocal() as db:
+        binding = (
+            db.query(Binding)
+            .filter(Binding.channel == "telegram", Binding.active.is_(True))
+            .order_by(Binding.priority.desc())
+            .first()
+        )
+        if not binding:
+            print(json.dumps({"ok": False, "error": "no active telegram binding"}))
+            raise SystemExit(0)
+
+        agent = db.get(Agent, binding.agent_id)
+        if not agent or not agent.active:
+            print(json.dumps({"ok": False, "error": "bound agent not found or inactive"}))
+            raise SystemExit(0)
+
+        provider = db.get(Provider, agent.default_provider_id) if agent.default_provider_id else None
+        if not provider or not provider.active:
+            print(json.dumps({"ok": False, "error": "default provider not found or inactive"}))
+            raise SystemExit(0)
+
+        ptype = str(getattr(provider.type, "value", provider.type))
+        if ptype not in {"OpenAI", "Anthropic", "DeepSeek", "Mistral", "Gemini", "Kimi", "Qwen", "GLM", "Ollama"}:
+            print(json.dumps({"ok": False, "error": f"provider type {ptype} is not supported for dry-run"}))
+            raise SystemExit(0)
+
+        cfg = dict(provider.config or {})
+        if ptype in {"OpenAI", "Anthropic", "DeepSeek", "Mistral", "Gemini", "Kimi", "Qwen", "GLM"} and not cfg.get("api_key"):
+            print(json.dumps({"ok": False, "error": f"provider {provider.name} has no api_key"}))
+            raise SystemExit(0)
+
+    runner = AgentRunner()
+    result = runner.run_with_meta(
+        "Reply with exactly: OK",
+        provider_type=provider.type,
+        provider_name=provider.name,
+        provider_config=cfg,
+        system=(agent.system_prompt or "You are a helpful assistant."),
+        history=[],
+        workspace_path=None,
+        model=None,
+        max_tokens=64,
+    )
+    text = (result.text or "").strip()
+    print(json.dumps({
+        "ok": True,
+        "provider": provider.name,
+        "provider_type": ptype,
+        "model": result.model,
+        "response_preview": text[:160],
+    }))
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": str(exc)}))
+"""
+    cmd = [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "backend",
+        "python",
+        "-c",
+        script,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=max(5.0, float(timeout)),
+            check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+
+    payload = _extract_json_line(result.stdout or "")
+    if payload is not None:
+        if payload.get("ok"):
+            return True, payload
+        return False, str(payload.get("error") or "dry-run failed")
+
+    text = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+    return False, text or "dry-run failed"
+
+
 def cmd_supported(args: argparse.Namespace) -> int:
     print(f"{BLD}Supported Channels{R}")
     print("- telegram: Implemented")
@@ -280,6 +512,92 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_live(args: argparse.Namespace) -> int:
+    print(f"{BLD}Prime Telegram Live Doctor{R}")
+    base_ok = cmd_doctor(
+        argparse.Namespace(
+            health_url=args.health_url,
+            timeout=args.timeout,
+            verify_api=args.verify_api,
+            all_tokens=args.all_tokens,
+        )
+    ) == 0
+    all_ok = base_ok
+
+    ok_snapshot, payload = _backend_runtime_snapshot(timeout=args.runtime_timeout)
+    if not ok_snapshot:
+        fail(f"Runtime snapshot failed: {payload}")
+        return 1
+
+    snapshot = payload if isinstance(payload, dict) else {}
+    print("")
+    print(f"{BLD}Runtime checks{R}")
+
+    bots = snapshot.get("bots") or []
+    tg_active = [
+        b for b in bots
+        if b.get("active") and "telegram" in [str(c).lower() for c in (b.get("channels") or [])]
+    ]
+    if tg_active:
+        ok(f"Active telegram bots in DB: {len(tg_active)}")
+    else:
+        fail("No active telegram bots in DB")
+        all_ok = False
+
+    bindings = snapshot.get("bindings") or []
+    if bindings:
+        ok(f"Active telegram bindings: {len(bindings)}")
+    else:
+        fail("No active telegram bindings in DB")
+        all_ok = False
+
+    agents = snapshot.get("agents") or []
+    if agents:
+        for agent in agents:
+            name = str(agent.get("name") or "unknown_agent")
+            dm_policy = str(agent.get("dm_policy") or "unknown")
+            provider_name = str(agent.get("provider_name") or "none")
+            provider_active = bool(agent.get("provider_active"))
+            requires_key = bool(agent.get("provider_requires_key"))
+            has_key = bool(agent.get("provider_has_api_key"))
+            if provider_name == "none":
+                fail(f"Agent {name}: default provider is not set")
+                all_ok = False
+                continue
+            if not provider_active:
+                fail(f"Agent {name}: provider {provider_name} is inactive")
+                all_ok = False
+                continue
+            if requires_key and not has_key:
+                fail(f"Agent {name}: provider {provider_name} has no api_key")
+                all_ok = False
+                continue
+            ok(f"Agent {name}: dm_policy={dm_policy}, provider={provider_name}")
+    else:
+        fail("No agents connected to telegram bindings")
+        all_ok = False
+
+    pending_pairings = int(snapshot.get("pending_pairings") or 0)
+    if pending_pairings > 0:
+        warn(f"Pending pairing requests: {pending_pairings}")
+    else:
+        ok("No pending pairing requests")
+
+    if args.send_test:
+        print("")
+        ok_test, test_payload = _backend_live_dry_run(timeout=args.run_timeout)
+        if ok_test and isinstance(test_payload, dict):
+            ok(
+                "Dry-run prompt OK via "
+                f"{test_payload.get('provider')} ({test_payload.get('model')})"
+            )
+        else:
+            fail(f"Dry-run prompt failed: {test_payload}")
+            all_ok = False
+
+    return 0 if all_ok else 1
+
+
 def cmd_connect(args: argparse.Namespace) -> int:
     env = load_env(ENV_FILE)
     existing = parse_csv(env.get("TELEGRAM_BOT_TOKENS"))
@@ -338,6 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prime channels (Telegram-first)")
     parser.add_argument("--health-url", default=API_HEALTH_URL)
     parser.add_argument("--timeout", type=float, default=6.0)
+    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
     p_supported = sub.add_parser("supported", help="Show supported channels")
@@ -351,6 +670,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--verify-api", action="store_true", help="Verify token(s) with Telegram getMe API")
     p_doctor.add_argument("--all-tokens", action="store_true", help="Verify all configured tokens")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_live = sub.add_parser("live", help="Run deep Telegram runtime diagnostics")
+    p_live.add_argument(
+        "--verify-api",
+        dest="verify_api",
+        action="store_true",
+        help="Verify token(s) with Telegram getMe API (default: on)",
+    )
+    p_live.add_argument(
+        "--no-verify-api",
+        dest="verify_api",
+        action="store_false",
+        help="Skip Telegram getMe verification",
+    )
+    p_live.add_argument("--all-tokens", action="store_true", help="Verify all configured tokens")
+    p_live.add_argument("--send-test", action="store_true", help="Send a real dry-run prompt to the selected provider")
+    p_live.add_argument("--runtime-timeout", type=float, default=12.0, help="Runtime snapshot timeout in seconds")
+    p_live.add_argument("--run-timeout", type=float, default=45.0, help="Dry-run timeout in seconds")
+    p_live.set_defaults(func=cmd_live, verify_api=True)
 
     p_connect = sub.add_parser("connect", help="Set Telegram token in .env")
     p_connect.add_argument("--token", help="Telegram bot token")
@@ -369,6 +707,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.no_color or not sys.stdout.isatty():
+        disable_color()
     return int(args.func(args))
 
 

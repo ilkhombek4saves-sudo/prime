@@ -8,6 +8,7 @@ class OllamaProvider(OpenAICompatibleProvider):
     """Ollama exposes an OpenAI-compatible /v1 endpoint.
 
     Config accepts either:
+      - api_base: OpenAI-compatible base URL (preferred, e.g. http://host.docker.internal:11434/v1)
       - base_url: full URL including port (default http://localhost:11434/v1)
       - docker_host: legacy alias for base_url
     No api_key required for local Ollama.
@@ -27,7 +28,9 @@ class OllamaProvider(OpenAICompatibleProvider):
 
     def _base_url(self) -> str:
         return (
-            self.config.get("base_url")
+            # Prefer the common config key used across OpenAI-compatible providers.
+            self.config.get("api_base")
+            or self.config.get("base_url")
             or self.config.get("docker_host")
             or self._default_base_url
         ).rstrip("/")

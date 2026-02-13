@@ -12,15 +12,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import traceback
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from telegram import Update
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.gateway.base import GatewayAdapter
 from app.persistence.database import SessionLocal
-from app.persistence.models import Agent, Bot, Provider, Session, SessionStatus, User, UserRole
+from app.persistence.models import (
+    Agent,
+    Bot,
+    PairingRequest,
+    PairingStatus,
+    Provider,
+    Session,
+    SessionStatus,
+    User,
+    UserRole,
+)
 from app.services.agent_runner import AgentRunner
 from app.services.binding_resolver import BindingResolver
 from app.services.dm_policy import DMPolicyService
@@ -28,6 +41,10 @@ from app.services.event_bus import get_event_bus
 from app.services.memory_service import MemoryService
 from app.services.token_optimizer import TokenOptimizationService
 from app.services.web_search import WebSearchService
+from app.services.long_term_memory import LongTermMemoryService
+from app.services.cost_tracker import CostTracker
+from app.config.settings import get_settings
+from app.services.pairing_service import PairingLimitError, create_request
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +52,486 @@ _memory_svc = MemoryService()
 _search_svc = WebSearchService()
 _agent_runner = AgentRunner()
 _token_optimizer = TokenOptimizationService()
+_ltm_svc = LongTermMemoryService()
+_cost_tracker = CostTracker()
+
+_FALLBACK_PROVIDER_ORDER = [
+    "openai_default",
+    "deepseek_default",
+    "kimi_default",
+    "glm_default",
+    "ollama_default",
+]
+_FALLBACK_PROVIDER_TYPES = {
+    "OpenAI",
+    "Anthropic",
+    "DeepSeek",
+    "Mistral",
+    "Gemini",
+    "Kimi",
+    "Qwen",
+    "GLM",
+    "Ollama",
+}
+
+_HTTP_STATUS_RE = re.compile(r"\b([45]\d{2})\b")
+_OPENAI_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+_TELEGRAM_TOKEN_RE = re.compile(r"\b\d{7,12}:[A-Za-z0-9_-]{20,}\b")
+
+
+@dataclass(frozen=True)
+class _ProviderErrorInfo:
+    code: str
+    summary: str
+    hint: str
+    http_status: int | None
+    detail: str
+
+
+def _sanitize_error_detail(raw: str) -> str:
+    text = (raw or "").replace("\n", " ").strip()
+    if not text:
+        text = "unknown error"
+    text = _OPENAI_KEY_RE.sub("sk-***", text)
+    text = _TELEGRAM_TOKEN_RE.sub("***:***", text)
+    if len(text) > 320:
+        return text[:320] + "...(truncated)"
+    return text
+
+
+def _extract_http_status(text: str) -> int | None:
+    match = _HTTP_STATUS_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _classify_provider_error(exc: Exception) -> _ProviderErrorInfo:
+    detail = _sanitize_error_detail(str(exc))
+    low = detail.lower()
+    status = _extract_http_status(detail)
+
+    if (
+        "api_key is required" in low
+        or "invalid api key" in low
+        or "invalid_api_key" in low
+        or "unauthorized" in low
+        or "authentication" in low
+        or status == 401
+    ):
+        return _ProviderErrorInfo(
+            code="auth_error",
+            summary="Провайдер отклонил ключ доступа.",
+            hint="Проверьте API ключ и его привязку к выбранному провайдеру.",
+            http_status=status,
+            detail=detail,
+        )
+
+    if (
+        status == 402
+        or "insufficient balance" in low
+        or "余额不足" in low  # common BigModel/Z.ai billing message
+        or "recharge" in low
+        or "no resource package" in low
+        or "\"code\":\"1113\"" in low
+        or "code\":\"1113\"" in low
+        or "insufficient credits" in low
+        or "insufficient_quota" in low
+        or "billing" in low
+        or "payment" in low
+        or "quota exceeded" in low
+    ):
+        return _ProviderErrorInfo(
+            code="billing_error",
+            summary="У провайдера не хватает лимита/баланса.",
+            hint="Пополните баланс или переключите агента на другой провайдер.",
+            http_status=status,
+            detail=detail,
+        )
+
+    if status == 429 or "rate limit" in low or "too many requests" in low:
+        return _ProviderErrorInfo(
+            code="rate_limit",
+            summary="Провайдер ограничил частоту запросов.",
+            hint="Подождите и повторите запрос или настройте fallback провайдера.",
+            http_status=status,
+            detail=detail,
+        )
+
+    if status == 404 or "model" in low and "not found" in low:
+        return _ProviderErrorInfo(
+            code="model_not_found",
+            summary="Модель или endpoint не найдены.",
+            hint="Проверьте `default_model` и `api_base` в конфиге провайдера.",
+            http_status=status,
+            detail=detail,
+        )
+
+    if (
+        status in {500, 502, 503, 504}
+        or "temporarily unavailable" in low
+        or "service unavailable" in low
+        or "overloaded" in low
+    ):
+        return _ProviderErrorInfo(
+            code="provider_unavailable",
+            summary="Провайдер временно недоступен.",
+            hint="Повторите запрос позже или используйте fallback провайдер.",
+            http_status=status,
+            detail=detail,
+        )
+
+    if (
+        "request failed" in low
+        or "connecterror" in low
+        or "timeout" in low
+        or "timed out" in low
+        or "connection" in low
+    ):
+        return _ProviderErrorInfo(
+            code="network_error",
+            summary="Сбой сети при обращении к провайдеру.",
+            hint="Проверьте сетевую доступность и `api_base`.",
+            http_status=status,
+            detail=detail,
+        )
+
+    return _ProviderErrorInfo(
+        code="provider_error",
+        summary="Неизвестная ошибка провайдера.",
+        hint="Проверьте логи backend и конфиг выбранного провайдера.",
+        http_status=status,
+        detail=detail,
+    )
+
+
+def _should_try_fallback(exc: Exception) -> bool:
+    code = _classify_provider_error(exc).code
+    return code in {
+        "auth_error",
+        "billing_error",
+        "rate_limit",
+        "model_not_found",
+        "provider_unavailable",
+        "network_error",
+    }
+
+
+def _format_provider_error_message(
+    *,
+    provider_name: str,
+    exc: Exception,
+    debug: bool,
+    error_id: str,
+) -> str:
+    if not debug:
+        return (
+            "Временная ошибка при обработке запроса. Попробуйте позже.\n"
+            f"Ошибка ID: `{error_id}`"
+        )
+
+    info = _classify_provider_error(exc)
+    lines = [
+        f"Ошибка у провайдера `{provider_name}` ({info.code}).",
+        info.summary,
+        f"Что сделать: {info.hint}",
+        f"Ошибка ID: `{error_id}`",
+    ]
+    if info.http_status:
+        lines.insert(2, f"HTTP: `{info.http_status}`")
+    lines.append(f"Детали: {info.detail}")
+    return "\n".join(lines)
+
+
+def _format_internal_error_message(exc: Exception, *, debug: bool, error_id: str) -> str:
+    detail = _sanitize_error_detail(str(exc))
+    if debug:
+        return f"Ошибка обработки сообщения (id: `{error_id}`): {detail}"
+    return (
+        f"Ошибка обработки сообщения (id: `{error_id}`). "
+        "Проверьте /status и логи backend."
+    )
+
+
+def _format_command_help() -> str:
+    return (
+        "Доступные команды:\n"
+        "/start — краткий статус и как работать\n"
+        "/help — список команд\n"
+        "/new — начать новый диалог (сбросить сессию)\n"
+        "/settings — текущие настройки агента\n"
+        "/status — статус маршрутизации и провайдера\n"
+        "/whoami — ваш id и статус доступа\n"
+        "/pair — запросить привязку (если требуется)\n"
+    )
+
+
+def _get_bot_and_binding(db, msg, token: str):
+    bot_record: Bot | None = (
+        db.query(Bot).filter(Bot.token == token, Bot.active.is_(True)).first()
+    )
+    if not bot_record:
+        return None, None, None, "unknown_bot"
+
+    resolver = BindingResolver(db)
+    binding = resolver.resolve(
+        channel="telegram",
+        account_id=str(bot_record.id),
+        peer=str(msg.chat.id),
+        bot_id=bot_record.id,
+    )
+    if not binding:
+        return bot_record, None, None, "no_binding"
+
+    agent: Agent | None = db.get(Agent, binding.agent_id)
+    if not agent or not agent.active:
+        return bot_record, binding, None, "no_agent"
+
+    return bot_record, binding, agent, None
+
+
+def _get_or_create_user(db, msg) -> User | None:
+    sender_id = msg.from_user.id if msg.from_user else None
+    if sender_id is None:
+        return None
+    user = db.query(User).filter(User.telegram_id == sender_id).first()
+    if user:
+        return user
+    user = User(
+        telegram_id=sender_id,
+        username=msg.from_user.username or f"tg_{sender_id}",
+        role=UserRole.user,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _get_active_session(db, bot_id, user_id, agent_id) -> Session | None:
+    return (
+        db.query(Session)
+        .filter(
+            Session.bot_id == bot_id,
+            Session.user_id == user_id,
+            Session.agent_id == agent_id,
+            Session.status == SessionStatus.active,
+        )
+        .first()
+    )
+
+
+async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    with SessionLocal() as db:
+        bot_record, _binding, agent, err = _get_bot_and_binding(db, msg, context.bot.token)
+        if err == "unknown_bot":
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+        if err == "no_binding":
+            await msg.reply_text(
+                "Бот ещё не привязан к агенту. Админ: создайте binding в админке."
+            )
+            return
+        if err == "no_agent":
+            await msg.reply_text("Агент для этого канала не найден или отключен.")
+            return
+
+        policy_svc = DMPolicyService(db)
+        paired = policy_svc.is_paired(
+            channel="telegram",
+            device_id=None,
+            account_id=str(bot_record.id),
+            peer=str(msg.chat.id),
+        )
+        decision = policy_svc.evaluate(
+            policy=agent.dm_policy,
+            sender_user_id=msg.from_user.id if msg.from_user else None,
+            allowed_user_ids=agent.allowed_user_ids,
+            paired=paired,
+            is_group=msg.chat.type in ("group", "supergroup", "channel"),
+            bot_mentioned=True,
+            group_requires_mention=agent.group_requires_mention,
+        )
+        if not decision.allowed and decision.reason == "pairing_required":
+            await msg.reply_text(
+                "Доступ закрыт. Нужна привязка. Отправьте /pair и дождитесь одобрения."
+            )
+            return
+
+    await msg.reply_text(
+        "Prime готов к работе. Пишите сообщение боту.\n\n" + _format_command_help()
+    )
+
+
+async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    await msg.reply_text(_format_command_help())
+
+
+async def _cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    with SessionLocal() as db:
+        bot_record, _binding, agent, err = _get_bot_and_binding(db, msg, context.bot.token)
+        if err == "unknown_bot":
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+        if err == "no_binding":
+            await msg.reply_text("Нет binding для этого чата. Админ: настройте binding.")
+            return
+        if err == "no_agent":
+            await msg.reply_text("Агент для этого канала не найден или отключен.")
+            return
+        user = _get_or_create_user(db, msg)
+        if not user:
+            await msg.reply_text("Не удалось определить пользователя.")
+            return
+        session = _get_active_session(db, bot_record.id, user.id, agent.id)
+        if session:
+            session.status = SessionStatus.finished
+            db.commit()
+    await msg.reply_text("Сессия сброшена. Начните новый диалог.")
+
+
+async def _cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    with SessionLocal() as db:
+        bot_record, _binding, agent, err = _get_bot_and_binding(db, msg, context.bot.token)
+        if err == "unknown_bot":
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+        if err == "no_binding":
+            await msg.reply_text("Нет binding для этого чата. Админ: настройте binding.")
+            return
+        if err == "no_agent":
+            await msg.reply_text("Агент для этого канала не найден или отключен.")
+            return
+
+        provider_id = agent.default_provider_id
+        provider = db.get(Provider, provider_id) if provider_id else None
+        provider_name = provider.name if provider else "не задан"
+        provider_type = provider.type.value if provider else "n/a"
+
+    await msg.reply_text(
+        "Текущие настройки:\n"
+        f"Агент: {agent.name}\n"
+        f"DM политика: {agent.dm_policy}\n"
+        f"Память: {'on' if agent.memory_enabled else 'off'}\n"
+        f"Web search: {'on' if agent.web_search_enabled else 'off'}\n"
+        f"Code exec: {'on' if agent.code_execution_enabled else 'off'}\n"
+        f"Провайдер: {provider_name} ({provider_type})"
+    )
+
+
+async def _cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    with SessionLocal() as db:
+        bot_record, _binding, agent, err = _get_bot_and_binding(db, msg, context.bot.token)
+        if err == "unknown_bot":
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+        if err == "no_binding":
+            await msg.reply_text("Нет binding для этого чата. Админ: настройте binding.")
+            return
+        if err == "no_agent":
+            await msg.reply_text("Агент для этого канала не найден или отключен.")
+            return
+        provider_id = agent.default_provider_id
+        provider = db.get(Provider, provider_id) if provider_id else None
+        provider_state = "ok" if provider and provider.active else "disabled"
+        paired = DMPolicyService(db).is_paired(
+            channel="telegram",
+            device_id=None,
+            account_id=str(bot_record.id),
+            peer=str(msg.chat.id),
+        )
+
+    await msg.reply_text(
+        "Статус:\n"
+        f"Gateway: ok\n"
+        f"Агент: {agent.name}\n"
+        f"Провайдер: {provider.name if provider else 'не задан'} ({provider_state})\n"
+        f"Pairing: {'paired' if paired else 'not paired'}"
+    )
+
+
+async def _cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    with SessionLocal() as db:
+        bot_record, _binding, _agent, err = _get_bot_and_binding(db, msg, context.bot.token)
+        if err == "unknown_bot":
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+        user = _get_or_create_user(db, msg)
+        paired = DMPolicyService(db).is_paired(
+            channel="telegram",
+            device_id=None,
+            account_id=str(bot_record.id),
+            peer=str(msg.chat.id),
+        ) if bot_record else False
+
+    sender = msg.from_user
+    username = f"@{sender.username}" if sender and sender.username else "—"
+    await msg.reply_text(
+        "Ваш профиль:\n"
+        f"id: {sender.id if sender else 'unknown'}\n"
+        f"username: {username}\n"
+        f"paired: {'yes' if paired else 'no'}"
+    )
+
+
+async def _cmd_pair(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    with SessionLocal() as db:
+        bot_record, _binding, _agent, err = _get_bot_and_binding(db, msg, context.bot.token)
+        if err == "unknown_bot":
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+        if not bot_record:
+            await msg.reply_text("Бот не найден или отключен.")
+            return
+
+        device_id = f"tg:{bot_record.id}:{msg.chat.id}"
+        try:
+            request = create_request(
+                db,
+                device_id=device_id,
+                channel="telegram",
+                account_id=str(bot_record.id),
+                peer=str(msg.chat.id),
+                requested_by_user_id=msg.from_user.id if msg.from_user else None,
+                request_meta={
+                    "username": msg.from_user.username if msg.from_user else None,
+                    "chat_title": msg.chat.title if msg.chat else None,
+                },
+                expires_in_minutes=30,
+            )
+        except PairingLimitError as exc:
+            await msg.reply_text(f"Нельзя создать запрос: {exc}")
+            return
+
+    await msg.reply_text(
+        "Запрос на привязку создан.\n"
+        f"Код: {request.code}\n"
+        "Передайте код администратору для подтверждения."
+    )
 
 
 async def _typing_loop(bot, chat_id: int, stop: asyncio.Event) -> None:
@@ -128,9 +625,14 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         await _handle_message_inner(update, context)
     except Exception as exc:
-        logger.error("handle_message error: %s\n%s", exc, traceback.format_exc())
+        error_id = uuid.uuid4().hex[:8]
+        logger.error("handle_message error id=%s: %s\n%s", error_id, exc, traceback.format_exc())
         if update.message:
-            await update.message.reply_text("Ошибка обработки сообщения.")
+            settings = get_settings()
+            show_debug = settings.telegram_show_errors or settings.app_env != "prod"
+            await update.message.reply_text(
+                _format_internal_error_message(exc, debug=show_debug, error_id=error_id)
+            )
 
 
 async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -221,6 +723,9 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 .first()
             )
+            if session and agent.default_provider_id and session.provider_id != agent.default_provider_id:
+                session.provider_id = agent.default_provider_id
+                db.commit()
         if not session and user:
             session = Session(
                 bot_id=bot_record.id,
@@ -236,13 +741,36 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         # Resolve provider
         provider_id = (session.provider_id if session else None) or agent.default_provider_id
         if not provider_id:
-            await msg.reply_text("No provider configured for this agent.")
+            await msg.reply_text(
+                "Для этого агента не настроен провайдер. "
+                "Админ: задайте default provider в настройках."
+            )
             return
 
         provider_record: Provider | None = db.get(Provider, provider_id)
         if not provider_record or not provider_record.active:
-            await msg.reply_text("Provider not available.")
+            await msg.reply_text(
+                "Выбранный провайдер недоступен или отключен. "
+                "Проверьте настройки провайдера в админке."
+            )
             return
+
+        # Load fallback providers in case of auth/billing errors.
+        providers_all = db.query(Provider).filter(Provider.active.is_(True)).all()
+        provider_candidates: list[Provider] = []
+        name_rank = {name: idx for idx, name in enumerate(_FALLBACK_PROVIDER_ORDER)}
+        for p in providers_all:
+            ptype = str(getattr(p.type, "value", p.type))
+            if ptype not in _FALLBACK_PROVIDER_TYPES:
+                continue
+            # Local Ollama can run without any key.
+            if ptype != "Ollama" and not (p.config or {}).get("api_key"):
+                continue
+            provider_candidates.append(p)
+
+        provider_candidates.sort(
+            key=lambda p: (name_rank.get(p.name, 999), p.name)
+        )
 
         provider_type = provider_record.type
         provider_name = provider_record.name
@@ -263,6 +791,15 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         history: list[dict] = []
         if agent_memory and session_id:
             history = _memory_svc.get_history(db, session_id, agent_max_history)
+
+        # Long-term memory: recall cross-session facts about this user
+        ltm_context = ""
+        if user:
+            try:
+                memories = _ltm_svc.recall(db, user.id, agent_id)
+                ltm_context = _ltm_svc.format_for_prompt(memories)
+            except Exception as _ltm_exc:
+                logger.debug("LTM recall skipped: %s", _ltm_exc)
 
         # RAG: retrieve relevant knowledge base context for this query
         rag_context = ""
@@ -289,6 +826,8 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
     system_parts = []
     if agent_system_prompt:
         system_parts.append(agent_system_prompt)
+    if ltm_context:
+        system_parts.append(ltm_context)
     if rag_context:
         system_parts.append(rag_context)
     if search_context:
@@ -347,20 +886,26 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         "provider_type": str(getattr(provider_type, "value", provider_type)),
         "optimizer": optimization_plan.as_meta(),
     }
+    def _run_with_provider(ptype, pname, pconfig, *, model_override: str | None):
+        return _agent_runner.run_with_meta(
+            msg.text,
+            provider_type=ptype,
+            provider_name=pname,
+            provider_config=pconfig,
+            system=system,
+            history=optimized_history,
+            workspace_path=workspace_path if agent_code_exec else None,
+            on_token=on_token if use_streaming else None,
+            # Don't blindly reuse a model picked for another provider (fallback case).
+            model=model_override,
+            max_tokens=selected_max_tokens,
+        )
+
     try:
         run_result = await loop.run_in_executor(
             None,
-            lambda: _agent_runner.run_with_meta(
-                msg.text,
-                provider_type=provider_type,
-                provider_name=provider_name,
-                provider_config=provider_config,
-                system=system,
-                history=optimized_history,
-                workspace_path=workspace_path if agent_code_exec else None,
-                on_token=on_token if use_streaming else None,
-                model=selected_model,
-                max_tokens=selected_max_tokens,
+            lambda: _run_with_provider(
+                provider_type, provider_name, provider_config, model_override=selected_model
             ),
         )
         reply_text = run_result.text
@@ -390,13 +935,113 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         )
     except Exception as exc:
         logger.error("Provider error for agent %s: %s", agent_name, exc, exc_info=True)
-        event_bus.publish_nowait(
-            "stream.error",
-            {"stream_id": stream_id, "channel": "telegram",
-             "chat_id": msg.chat.id, "agent": agent_name, "error": str(exc)},
-        )
-        response_meta["error"] = str(exc)
-        reply_text = "Sorry, something went wrong. Please try again."
+        # Fallback attempt only for retryable provider classes.
+        fallback_result = None
+        primary_exc = exc
+        primary_provider_name = provider_name
+        fallback_failures: list[tuple[str, Exception]] = []
+        if _should_try_fallback(primary_exc):
+            for candidate in provider_candidates:
+                if candidate.name == provider_name:
+                    continue
+                try:
+                    fallback_result = await loop.run_in_executor(
+                        None,
+                        lambda c=candidate: _run_with_provider(
+                            c.type, c.name, dict(c.config), model_override=None
+                        ),
+                    )
+                    provider_name = candidate.name
+                    provider_type = candidate.type
+                    provider_config = dict(candidate.config)
+                    response_meta["fallback"] = {
+                        "from": primary_provider_name,
+                        "to": candidate.name,
+                    }
+                    break
+                except Exception as fallback_exc:
+                    fallback_failures.append((candidate.name, fallback_exc))
+                    logger.error("Fallback provider %s failed: %s", candidate.name, fallback_exc)
+
+        if fallback_result is not None:
+            run_result = fallback_result
+            reply_text = run_result.text
+            response_meta["provider_name"] = provider_name
+            response_meta["provider_type"] = str(getattr(provider_type, "value", provider_type))
+            input_tokens = run_result.input_tokens or optimization_plan.estimated_input_tokens
+            output_tokens = (
+                run_result.output_tokens or _token_optimizer.estimate_text_tokens(reply_text)
+            )
+            estimated_cost = _token_optimizer.estimate_cost(
+                provider_type=provider_type,
+                provider_name=provider_name,
+                provider_config=provider_config,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            response_meta["usage"] = {
+                "model": run_result.model or selected_model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "estimated_cost_usd": round(estimated_cost, 8),
+                "estimated_tokens": bool(run_result.input_tokens <= 0 or run_result.output_tokens <= 0),
+            }
+            event_bus.publish_nowait(
+                "stream.end",
+                {"stream_id": stream_id, "channel": "telegram",
+                 "chat_id": msg.chat.id, "agent": agent_name, "chars": len(reply_text),
+                 "input_tokens": input_tokens, "output_tokens": output_tokens},
+            )
+            event_bus.publish_nowait(
+                "stream.fallback",
+                {"stream_id": stream_id, "channel": "telegram",
+                 "chat_id": msg.chat.id, "agent": agent_name,
+                 "from": primary_provider_name, "to": provider_name},
+            )
+        else:
+            error_id = uuid.uuid4().hex[:8]
+            primary_info = _classify_provider_error(primary_exc)
+            logger.error(
+                "provider failure id=%s agent=%s provider=%s code=%s detail=%s",
+                error_id,
+                agent_name,
+                primary_provider_name,
+                primary_info.code,
+                primary_info.detail,
+                exc_info=primary_exc,
+            )
+            event_bus.publish_nowait(
+                "stream.error",
+                {"stream_id": stream_id, "channel": "telegram",
+                 "chat_id": msg.chat.id, "agent": agent_name,
+                 "error": str(primary_exc), "error_id": error_id},
+            )
+            response_meta["error"] = str(primary_exc)
+            response_meta["error_id"] = error_id
+            settings = get_settings()
+            show_debug = settings.telegram_show_errors or settings.app_env != "prod"
+            reply_text = _format_provider_error_message(
+                provider_name=primary_provider_name,
+                exc=primary_exc,
+                debug=show_debug,
+                error_id=error_id,
+            )
+            if fallback_failures:
+                reply_text += "\n\nFallback провайдеры тоже не сработали:"
+                for name, fexc in fallback_failures[:3]:
+                    finfo = _classify_provider_error(fexc)
+                    suffix = f" (HTTP {finfo.http_status})" if finfo.http_status else ""
+                    line = f"\n- `{name}`: {finfo.code}{suffix}"
+                    if show_debug:
+                        line += f" | {finfo.detail}"
+                    reply_text += line
+                if len(fallback_failures) > 3:
+                    reply_text += f"\n...и ещё {len(fallback_failures) - 3}"
+            stop_stream.set()
+            await display_task
+            if not use_streaming or not stream_buf.get_text():
+                await msg.reply_text(reply_text)
+            return
     finally:
         stop_stream.set()
         await display_task
@@ -405,11 +1050,11 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
     if not use_streaming or not stream_buf.get_text():
         await msg.reply_text(reply_text)
 
-    # ── Save exchange to memory ───────────────────────────────────────────────
+    # ── Save exchange to memory + cost tracking + LTM extraction ────────────
     if (
         agent_memory
         and session_id
-        and reply_text != "Sorry, something went wrong. Please try again."
+        and not reply_text.startswith("Ошибка у провайдера `")
     ):
         with SessionLocal() as db:
             _memory_svc.save_exchange(
@@ -424,6 +1069,31 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
                     "last_optimizer": optimization_plan.as_meta(),
                 },
             )
+            # Cost tracking
+            usage_data = response_meta.get("usage", {})
+            if usage_data:
+                try:
+                    _cost_tracker.record(
+                        db,
+                        user_id=user.id if user else None,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        model=usage_data.get("model", "unknown"),
+                        input_tokens=usage_data.get("input_tokens", 0),
+                        output_tokens=usage_data.get("output_tokens", 0),
+                        cost_usd=usage_data.get("estimated_cost_usd", 0),
+                        channel="telegram",
+                    )
+                except Exception as _cost_exc:
+                    logger.debug("Cost tracking failed: %s", _cost_exc)
+            # LTM extraction
+            if user:
+                try:
+                    _ltm_svc.extract_and_store(
+                        db, user.id, agent_id, msg.text, reply_text, session_id
+                    )
+                except Exception as _ltm_exc:
+                    logger.debug("LTM extraction failed: %s", _ltm_exc)
 
     get_event_bus().publish_nowait(
         "task.telegram_message",
@@ -460,6 +1130,13 @@ def build_telegram_gateway(tokens_csv: str) -> TelegramGateway:
         if not token:
             continue
         app = Application.builder().token(token).build()
+        app.add_handler(CommandHandler("start", _cmd_start))
+        app.add_handler(CommandHandler("help", _cmd_help))
+        app.add_handler(CommandHandler("new", _cmd_new))
+        app.add_handler(CommandHandler("settings", _cmd_settings))
+        app.add_handler(CommandHandler("status", _cmd_status))
+        app.add_handler(CommandHandler("whoami", _cmd_whoami))
+        app.add_handler(CommandHandler("pair", _cmd_pair))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
         app.add_error_handler(_error_handler)
         applications.append(app)

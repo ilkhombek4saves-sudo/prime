@@ -93,7 +93,13 @@ class OpenAICompatibleProvider(PricedProvider):
             "stream_options": {"include_usage": True},
         }
         with client.stream("POST", url, headers=headers, json=stream_payload) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                # Ensure body is read so httpx can expose content safely.
+                error_body = response.read()
+                error_text = error_body.decode("utf-8", errors="ignore") if isinstance(error_body, bytes) else str(error_body)
+                raise ProviderError(
+                    f"{self.provider_type} API error {response.status_code}: {error_text}"
+                )
             for raw_line in response.iter_lines():
                 if not raw_line:
                     continue

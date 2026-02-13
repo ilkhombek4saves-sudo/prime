@@ -163,10 +163,10 @@ class AgentRunner:
         model_cfg = (config.get("models") or {}).get(model, {})
         max_tokens = int(max_tokens_override or model_cfg.get("max_tokens", 4096))
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        # Local/OpenAI-compatible providers (e.g. Ollama) may not require auth at all.
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         # Build initial messages
         messages: list[dict] = []
@@ -306,7 +306,16 @@ class AgentRunner:
                     headers=headers,
                     json=payload,
                 ) as response:
-                    response.raise_for_status()
+                    if response.status_code >= 400:
+                        error_body = response.read()
+                        error_text = (
+                            error_body.decode("utf-8", errors="ignore")
+                            if isinstance(error_body, bytes)
+                            else str(error_body)
+                        )
+                        raise ProviderError(
+                            f"OpenAI API {response.status_code}: {error_text}"
+                        )
                     for raw_line in response.iter_lines():
                         if not raw_line:
                             continue

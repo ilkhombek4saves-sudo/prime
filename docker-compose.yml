@@ -16,6 +16,10 @@ services:
       dockerfile: backend/Dockerfile
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Alternative for Linux without Docker Desktop: uncomment and set host IP
+    # network_mode: host
     depends_on:
       - db
     ports:

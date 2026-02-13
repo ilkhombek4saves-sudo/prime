@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -27,6 +28,17 @@ RED = "\033[91m"
 CYN = "\033[96m"
 DIM = "\033[2m"
 BLD = "\033[1m"
+
+
+def disable_color() -> None:
+    global R, GRN, YLW, RED, CYN, DIM, BLD
+    R = ""
+    GRN = ""
+    YLW = ""
+    RED = ""
+    CYN = ""
+    DIM = ""
+    BLD = ""
 
 
 def ok(msg: str) -> None:
@@ -112,6 +124,36 @@ def clip_text(value: str, limit: int = 320) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...(truncated)"
+
+
+def wait_for_health(url: str, timeout_seconds: float, request_timeout: float) -> tuple[bool, str]:
+    deadline = time.monotonic() + max(1.0, timeout_seconds)
+    last_error = "not ready"
+    while time.monotonic() < deadline:
+        ok_flag, payload = fetch(url, timeout=request_timeout)
+        if ok_flag:
+            return True, "ok"
+        last_error = str(payload)
+        time.sleep(0.8)
+    return False, last_error
+
+
+def print_start_summary(args: argparse.Namespace, *, backend_ready: bool, backend_detail: str) -> None:
+    print()
+    print(f"{BLD}Prime Gateway Ready{R}")
+    print(f"{DIM}{'-' * 54}{R}")
+    if backend_ready:
+        ok(f"Backend health: {args.health_url}")
+    else:
+        fail(f"Backend health: {args.health_url} ({backend_detail})")
+    print(f"Dashboard: {args.dashboard_url}")
+    print(f"API docs:  {args.api_url}/docs")
+    print(f"WS:        {args.api_url}/api/ws/events")
+    print()
+    print("Next commands:")
+    print("  prime gateway status --watch")
+    print("  prime channels doctor --verify-api")
+    print("  prime logs backend")
 
 
 def _run_status_once(args: argparse.Namespace) -> int:
@@ -245,11 +287,42 @@ def cmd_start(args: argparse.Namespace) -> int:
     if args.build:
         cmd.append("--build")
     result = dc(*cmd, check=False)
-    if result.returncode == 0:
-        ok("Gateway services started")
+    if result.returncode != 0:
+        fail("Gateway start failed")
+        return result.returncode
+
+    ok("Gateway services started")
+
+    if args.no_wait:
+        info("Skipping readiness wait (--no-wait)")
+        print_start_summary(args, backend_ready=False, backend_detail="readiness wait skipped")
         return 0
-    fail("Gateway start failed")
-    return result.returncode
+
+    info(f"Waiting for backend readiness ({args.wait_timeout:.0f}s timeout)...")
+    backend_ready, backend_detail = wait_for_health(
+        args.health_url,
+        timeout_seconds=args.wait_timeout,
+        request_timeout=args.timeout,
+    )
+    if backend_ready:
+        ok("Backend is healthy")
+    else:
+        fail("Backend did not become healthy in time")
+
+    if args.post_status:
+        _run_status_once(
+            argparse.Namespace(
+                **{
+                    **vars(args),
+                    "watch": False,
+                    "json": False,
+                    "strict": False,
+                    "interval": 2.0,
+                }
+            )
+        )
+    print_start_summary(args, backend_ready=backend_ready, backend_detail=backend_detail)
+    return 0 if backend_ready else 1
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -306,6 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--health-url", default=DEFAULT_HEALTH_URL)
     parser.add_argument("--metrics-url", default=DEFAULT_METRICS_URL)
     parser.add_argument("--timeout", type=float, default=3.0)
+    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
 
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -318,6 +392,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_start = sub.add_parser("start", help="Start gateway services")
     p_start.add_argument("--build", action="store_true", help="Build images before start")
+    p_start.add_argument("--no-wait", action="store_true", help="Do not wait for health readiness")
+    p_start.add_argument("--wait-timeout", type=float, default=45.0, help="Health wait timeout (seconds)")
+    p_start.add_argument("--post-status", action="store_true", help="Print full status block after start")
     p_start.set_defaults(func=cmd_start)
 
     p_stop = sub.add_parser("stop", help="Stop gateway services")
@@ -359,6 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.no_color or not sys.stdout.isatty():
+        disable_color()
     return int(args.func(args))
 
 

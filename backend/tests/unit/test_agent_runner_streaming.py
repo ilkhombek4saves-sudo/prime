@@ -7,6 +7,7 @@ from app.services.agent_runner import AgentRunner
 class _FakeStreamResponse:
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
+        self.status_code = 200
 
     def __enter__(self):
         return self

@@ -25,6 +25,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${DB_PASSWORD}@db:5432/multibot
       APP_ENV: production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Run migrations then start uvicorn with 2 workers for better concurrency
     command: >
       sh -c "alembic upgrade head &&
