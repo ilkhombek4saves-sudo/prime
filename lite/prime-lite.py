@@ -439,7 +439,7 @@ def build_system_prompt():
     model_list = ", ".join(models[:5]) if models else "none detected"
     api_list = ", ".join(apis) if apis else "none configured"
 
-    return f"""You are Prime, an AI coding agent running on a real machine with FULL access to the local filesystem and shell.
+    return f"""You are Prime, an AI coding agent running on a REAL machine with FULL ACCESS to the local filesystem, shell, and network.
 
 ## Your Environment
 - Hostname: {info['hostname']}
@@ -452,26 +452,29 @@ def build_system_prompt():
 - Configured cloud APIs: {api_list}
 - Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-## Your Tools
-You have tools to interact with the system. USE THEM to get real data.
+## CRITICAL: YOU MUST USE TOOLS
+When the user asks about files, directories, or system state, YOU MUST CALL THE APPROPRIATE TOOL. DO NOT say you cannot access files.
 
-- read_file(path) — Read any file. USE THIS when asked about file contents.
-- list_files(directory) — List directory contents. USE THIS for "what files" questions.
-- write_file(path, content) — Create or overwrite files.
-- edit_file(path, old_text, new_text) — Edit files by exact text replacement.
-- exec(command) — Run any shell command (ls, git, grep, find, pip, curl, etc).
-- web_search(query) — Search the web.
-- web_fetch(url) — Fetch content from a URL.
-- memory_search(query) — Search memory/notes files.
+### Tool Usage Rules:
+- If user asks "what files" or "list directory" -> CALL list_files tool
+- If user asks "read file" or "show file content" -> CALL read_file tool  
+- If user asks "what is my IP" or "system info" -> CALL exec tool with command
+- If user asks about current directory -> CALL list_files with "."
 
-## Critical Rules
-1. ALWAYS use tools to get real data. NEVER say "I can't access files" or "I don't have access to your filesystem".
-2. When asked about files -> use list_files or read_file. NEVER guess file contents.
-3. When asked about the system -> use exec (uname -a, df -h, ps aux, etc).
-4. When asked to find something -> use exec with grep/find, or list_files with recursive=true.
-5. You ARE running on the machine. You CAN access everything. Use your tools.
-6. Answer in the same language as the user's question.
-7. Be concise but thorough. Show real data from tools."""
+### Available Tools:
+- read_file(path): Read file contents. USE for any file reading request.
+- list_files(directory): List directory. USE for "what files" or "ls" requests.
+- exec(command): Run shell commands (ls, cat, grep, find, etc).
+- write_file(path, content): Write files.
+- edit_file(path, old_text, new_text): Edit files.
+- web_search(query): Search web.
+- web_fetch(url): Fetch URL content.
+
+### ABSOLUTE RULES:
+1. NEVER say "I cannot access your filesystem" or "I don't have access" — YOU DO HAVE ACCESS via tools.
+2. ALWAYS call the appropriate tool when asked about files or system.
+3. You are running ON THE MACHINE — you can read files, run commands, access everything.
+4. Answer in the same language as the user's question."""
 
 
 # ─── HTTP Helper ────────────────────────────────────────────────────────────
@@ -739,6 +742,21 @@ class AgentLoop:
             ):
                 return content
 
+            # Check if model claims it can't access files (wrong answer)
+            if not tool_calls and isinstance(content, str):
+                lower_content = content.lower()
+                if any(phrase in lower_content for phrase in [
+                    "не могу", "не имею доступа", "i cannot", "i can't", "i don't have access",
+                    "no access", "unable to access", "cannot access", "не могу получить",
+                    "i'm a text ai", "text-based ai", "i'm an ai assistant"
+                ]):
+                    # Force tool usage by adding explicit instruction
+                    messages.append({
+                        "role": "user",
+                        "content": "You MUST use the list_files or read_file tool to answer. Do not say you cannot access files. Call the tool now."
+                    })
+                    continue  # Retry with tool instruction
+            
             if not tool_calls:
                 return content  # Final answer
 
@@ -785,6 +803,20 @@ class AgentLoop:
                     ):
                         print(f"\n{RED}{content}{R}\n")
                         break
+
+                    # Check if model claims it can't access files
+                    if not tool_calls and isinstance(content, str):
+                        lower_content = content.lower()
+                        if any(phrase in lower_content for phrase in [
+                            "не могу", "не имею доступа", "i cannot", "i can't", "i don't have access",
+                            "no access", "unable to access", "cannot access", "не могу получить",
+                            "i'm a text ai", "text-based ai", "i'm an ai assistant"
+                        ]):
+                            messages.append({
+                                "role": "user",
+                                "content": "You MUST use the list_files or read_file tool to answer. Do not say you cannot access files. Call the tool now."
+                            })
+                            continue
 
                     if not tool_calls:
                         messages.append({"role": "assistant", "content": content})
