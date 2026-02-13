@@ -528,6 +528,93 @@ def call_openai_compat(messages, api_url, api_key, model):
     return content, tool_calls, msg
 
 
+# ─── Provider: Claude Code CLI ──────────────────────────────────────────────
+def call_claude_code(messages, model="claude-sonnet-4-5-20251022"):
+    """Call Claude Code CLI directly. Returns (content, tool_calls, raw_msg)."""
+    import subprocess
+    
+    # Extract user query from messages
+    query = ""
+    for m in messages:
+        if m.get("role") == "user":
+            query = m.get("content", "")
+            break
+    
+    if not query:
+        return "No query provided", [], {}
+    
+    try:
+        # Call Claude Code CLI
+        result = subprocess.run(
+            ["claude", "-p", query],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(WORKSPACE)
+        )
+        
+        output = result.stdout
+        if result.stderr and "rate limit" not in result.stderr.lower():
+            output += "\n\n[Errors]: " + result.stderr
+        
+        return output, [], {}
+    except FileNotFoundError:
+        return "Error: Claude Code CLI not installed. Run: npm install -g @anthropic-ai/claude-code", [], {}
+    except subprocess.TimeoutExpired:
+        return "Error: Claude Code timed out after 5 minutes", [], {}
+    except Exception as e:
+        return f"Error calling Claude Code: {e}", [], {}
+
+
+# ─── Provider: Anthropic (Claude) ───────────────────────────────────────────
+def call_anthropic(messages, api_key, model="claude-3-5-sonnet-20241022"):
+    """Call Anthropic Claude API. Returns (content, tool_calls, raw_msg)."""
+    # Convert messages to Anthropic format
+    system_text = ""
+    anthropic_messages = []
+    
+    for m in messages:
+        role = m.get("role", "user")
+        if role == "system":
+            system_text = m.get("content", "")
+        elif role == "assistant":
+            anthropic_messages.append({"role": "assistant", "content": m.get("content", "")})
+        elif role == "user":
+            anthropic_messages.append({"role": "user", "content": m.get("content", "")})
+    
+    data = {
+        "model": model,
+        "messages": anthropic_messages,
+        "max_tokens": 4096,
+        "temperature": 0.7,
+    }
+    if system_text:
+        data["system"] = system_text
+    
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01"
+    }
+    
+    resp = _http_post("https://api.anthropic.com/v1/messages", data, headers=headers, timeout=120)
+    
+    content = resp.get("content", [{}])[0].get("text", "")
+    # Anthropic doesn't use tool_calls in same format, check for tool_use
+    tool_calls = []
+    for block in resp.get("content", []):
+        if block.get("type") == "tool_use":
+            tool_calls.append({
+                "id": block.get("id"),
+                "function": {
+                    "name": block.get("name"),
+                    "arguments": block.get("input", {})
+                }
+            })
+    
+    return content, tool_calls, resp
+
+
 # ─── Provider: Gemini ───────────────────────────────────────────────────────
 def call_gemini(messages, api_key, model="gemini-2.0-flash"):
     """Call Gemini with function calling. Returns (content, tool_calls, raw_msg)."""
@@ -601,6 +688,15 @@ def select_provider():
         return "gemini"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    # Check if Claude Code CLI is installed
+    try:
+        import subprocess
+        subprocess.run(["claude", "--version"], capture_output=True, check=True)
+        return "claude-code"
+    except:
+        pass
     return None
 
 
@@ -668,6 +764,10 @@ class AgentLoop:
                     messages, "https://api.openai.com/v1/chat/completions",
                     os.environ["OPENAI_API_KEY"], self.model,
                 )
+            elif self.provider == "anthropic":
+                return call_anthropic(messages, os.environ["ANTHROPIC_API_KEY"], self.model)
+            elif self.provider == "claude-code":
+                return call_claude_code(messages, self.model)
             return "No provider configured.", [], {}
         except Exception as e:
             # Fallback to Ollama if primary fails
@@ -872,6 +972,14 @@ def cmd_status():
         else:
             warn(f"{name}: not set")
 
+    # Claude Code CLI
+    try:
+        import subprocess
+        subprocess.run(["claude", "--version"], capture_output=True, check=True)
+        ok("Claude Code CLI: installed")
+    except:
+        warn("Claude Code CLI: not installed (npm i -g @anthropic-ai/claude-code)")
+
     provider = select_provider()
     print(f"\n{BOLD}Active Provider:{R} {GRN}{provider or 'NONE'}{R}\n")
 
@@ -983,12 +1091,19 @@ def cmd_help():
 
 {BOLD}Options:{R}
   --model MODEL      Use specific model (e.g. qwen2.5:14b, deepseek-chat)
-  --provider NAME    Force provider (ollama, deepseek, kimi, gemini, openai)
+  --provider NAME    Force provider (ollama, deepseek, kimi, gemini, claude-code)
   --telegram, -t     Send response to Telegram chat
+
+{BOLD}Providers:{R}
+  ollama            Local models (qwen2.5, llama3.2) - default
+  deepseek          DeepSeek API (fast, cheap)
+  kimi              Moonshot AI (Chinese/English)
+  gemini            Google Gemini
+  claude-code       Claude Code CLI (uses your OAuth token)
 
 {BOLD}Telegram:{R}
   1. Run: prime telegram
-  2. Send message to @prime_ai_agent_bot
+  2. Send message to @gpuvpsopenclawbot
   3. Use --telegram flag to get responses in chat
 """)
 
