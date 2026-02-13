@@ -54,6 +54,15 @@ class FastRouter:
             log("Fast path: direct directory listing")
             return "direct", [], self._list_directory()
         
+        # FAST PATH: Direct file reading for "read/show/cat <file>" commands
+        read_match = re.search(r'(?:read|show|cat|open)\s+[\'"]?([\w\-.\/]+\.[\w]+)[\'"]?', query, re.IGNORECASE)
+        if read_match:
+            fname = read_match.group(1)  # Preserve original case
+            content = self._read_file(fname)
+            if content:
+                log(f"Fast path: reading {fname}")
+                return "direct", [], f"=== {fname} ===\n{content[:5000]}\n{'...[truncated]' if len(content) > 5000 else ''}"
+        
         # 1. Check for directory listing request (with LLM analysis)
         dir_keywords = ["directory", "what's in", "what is in", "files in"]
         if any(kw in q_lower for kw in dir_keywords):
