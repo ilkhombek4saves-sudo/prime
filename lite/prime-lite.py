@@ -972,6 +972,7 @@ def cmd_help():
   prime whoami       Show self-awareness info
   prime init         Initialize configuration
   prime scan         Scan for projects
+  prime telegram     Setup Telegram bot
   prime help         This help
 
 {BOLD}Examples:{R}
@@ -983,6 +984,12 @@ def cmd_help():
 {BOLD}Options:{R}
   --model MODEL      Use specific model (e.g. qwen2.5:14b, deepseek-chat)
   --provider NAME    Force provider (ollama, deepseek, kimi, gemini, openai)
+  --telegram, -t     Send response to Telegram chat
+
+{BOLD}Telegram:{R}
+  1. Run: prime telegram
+  2. Send message to @prime_ai_agent_bot
+  3. Use --telegram flag to get responses in chat
 """)
 
 
@@ -995,9 +1002,10 @@ def main():
         agent.interactive()
         return
 
-    # Parse --model and --provider flags
+    # Parse flags
     model = None
     provider = None
+    use_telegram = False
     query_parts = []
     i = 0
     while i < len(args):
@@ -1007,6 +1015,9 @@ def main():
         elif args[i] == "--provider" and i + 1 < len(args):
             provider = args[i + 1]
             i += 2
+        elif args[i] in ("--telegram", "-t"):
+            use_telegram = True
+            i += 1
         else:
             query_parts.append(args[i])
             i += 1
@@ -1028,11 +1039,23 @@ def main():
         cmd_scan()
     elif cmd in ("help", "--help", "-h"):
         cmd_help()
+    elif cmd == "telegram":
+        # Telegram setup
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "lite"))
+        from telegram_bot import setup_chat_id
+        setup_chat_id()
     elif cmd in ("ls", "dir", "files"):
         # Fast path: directory listing
         import subprocess
         result = subprocess.run(f"ls -la {WORKSPACE}", shell=True, capture_output=True, text=True)
-        print(f"\n{result.stdout}\n")
+        output = result.stdout
+        print(f"\n{output}\n")
+        
+        # Send to Telegram if requested
+        if use_telegram:
+            sys.path.insert(0, str(Path(__file__).resolve().parent / "lite"))
+            from telegram_bot import notify_user
+            notify_user(f"📁 *Directory listing:*\n```\n{output[:3000]}\n```")
     else:
         # Agent query
         query = " ".join(query_parts)
@@ -1042,12 +1065,32 @@ def main():
         if any(kw in q_lower for kw in ["list files", "what files", "show files", "what's here"]):
             import subprocess
             result = subprocess.run(f"ls -la {WORKSPACE}", shell=True, capture_output=True, text=True)
-            print(f"\n{result.stdout}\n")
+            output = result.stdout
+            print(f"\n{output}\n")
+            
+            if use_telegram:
+                sys.path.insert(0, str(Path(__file__).resolve().parent / "lite"))
+                from telegram_bot import notify_user
+                notify_user(f"📁 *Files:*\n```\n{output[:3000]}\n```")
             return
         
-        agent = AgentLoop(model=model, provider=provider)
-        response = agent.chat(query)
-        print(f"\n{response}\n")
+        # Process through agent
+        if use_telegram:
+            # Send to Telegram
+            sys.path.insert(0, str(Path(__file__).resolve().parent / "lite"))
+            from telegram_bot import notify_user
+            notify_user(f"⏳ Processing: `{query}`")
+            
+            agent = AgentLoop(model=model, provider=provider)
+            response = agent.chat(query)
+            
+            # Send response to Telegram
+            notify_user(f"✅ *Query:* `{query}`\n\n*Response:*\n{response[:3800]}")
+            print(f"\nResponse sent to Telegram!\n")
+        else:
+            agent = AgentLoop(model=model, provider=provider)
+            response = agent.chat(query)
+            print(f"\n{response}\n")
 
 
 if __name__ == "__main__":

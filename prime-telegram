@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""
+Prime Telegram Interface
+Запускает запрос и отправляет ответ в Telegram
+"""
+import subprocess
+import sys
+import os
+
+# Add lite directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lite'))
+
+from telegram_bot import notify_user
+
+def main():
+    if len(sys.argv) < 2:
+        notify_user("❌ *Error:* No command provided\n\nUsage:\n`prime-telegram <query>`")
+        return
+    
+    query = " ".join(sys.argv[1:])
+    
+    # Send "processing" message
+    notify_user(f"⏳ Processing: `{query}`")
+    
+    # Run prime command
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', f'''
+import sys
+sys.path.insert(0, "lite")
+from prime_lite import AgentLoop
+agent = AgentLoop()
+if not agent._init_provider():
+    print("Error: No LLM available")
+    sys.exit(1)
+response = agent.chat("{query}")
+print(response)
+'''],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd='/home/ilkhombek4saves/prime'
+        )
+        
+        output = result.stdout
+        if result.stderr:
+            output += "\n\nErrors:\n" + result.stderr
+        
+        # Send result to Telegram
+        if len(output) > 4000:
+            output = output[:4000] + "\n\n...[truncated]"
+        
+        notify_user(f"✅ *Query:* `{query}`\n\n*Response:*\n```\n{output}\n```")
+        
+    except subprocess.TimeoutExpired:
+        notify_user(f"⏱️ *Timeout:* Query took too long\n\n`{query}`")
+    except Exception as e:
+        notify_user(f"❌ *Error:* {e}\n\nQuery: `{query}`")
+
+if __name__ == "__main__":
+    main()
