@@ -1,0 +1,378 @@
+════════════════════════════════════════════════════════════
+PROJECT STRUCTURE
+════════════════════════════════════════════════════════════
+/home/ilkhombek4saves/prime/backend/Dockerfile
+/home/ilkhombek4saves/prime/backend/pyproject.toml
+/home/ilkhombek4saves/prime/backend/app/main.py
+/home/ilkhombek4saves/prime/backend/app/__init__.py
+/home/ilkhombek4saves/prime/backend/alembic/env.py
+/home/ilkhombek4saves/prime/docs/architecture.md
+/home/ilkhombek4saves/prime/docs/PRODUCT_FLOW.md
+/home/ilkhombek4saves/prime/docs/openclaw-s1-workplan.md
+/home/ilkhombek4saves/prime/docs/openclaw-gap-analysis.md
+/home/ilkhombek4saves/prime/docs/ROADMAP.md
+/home/ilkhombek4saves/prime/docs/api.md
+/home/ilkhombek4saves/prime/docs/operations.md
+/home/ilkhombek4saves/prime/docs/security.md
+/home/ilkhombek4saves/prime/CONTRIBUTING.md
+/home/ilkhombek4saves/prime/docker-compose.yml
+/home/ilkhombek4saves/prime/frontend/Dockerfile
+/home/ilkhombek4saves/prime/frontend/test-results/.last-run.json
+/home/ilkhombek4saves/prime/frontend/package.json
+/home/ilkhombek4saves/prime/frontend/package-lock.json
+/home/ilkhombek4saves/prime/frontend/vite.config.js
+/home/ilkhombek4saves/prime/frontend/playwright.config.js
+/home/ilkhombek4saves/prime/README.md
+/home/ilkhombek4saves/prime/config/plugins.yaml
+/home/ilkhombek4saves/prime/config/bots.yaml
+/home/ilkhombek4saves/prime/config/providers.yaml
+/home/ilkhombek4saves/prime/.github/workflows/ci.yml
+/home/ilkhombek4saves/prime/Makefile
+/home/ilkhombek4saves/prime/LITE_MODE.md
+/home/ilkhombek4saves/prime/.claude/settings.local.json
+/home/ilkhombek4saves/prime/prime-agent-new.py
+/home/ilkhombek4saves/prime/app/Dockerfile
+/home/ilkhombek4saves/prime/app/tsconfig.json
+/home/ilkhombek4saves/prime/app/README.md
+/home/ilkhombek4saves/prime/app/vite.config.ts
+/home/ilkhombek4saves/prime/app/eslint.config.js
+/home/ilkhombek4saves/prime/app/components.json
+/home/ilkhombek4saves/prime/app/package.json
+/home/ilkhombek4saves/prime/app/package-lock.json
+/home/ilkhombek4saves/prime/app/tsconfig.app.json
+/home/ilkhombek4saves/prime/app/tsconfig.node.json
+/home/ilkhombek4saves/prime/app/tailwind.config.js
+/home/ilkhombek4saves/prime/app/postcss.config.js
+/home/ilkhombek4saves/prime/scripts/service.py
+/home/ilkhombek4saves/prime/scripts/gateway.py
+/home/ilkhombek4saves/prime/scripts/gateway_cli.py
+/home/ilkhombek4saves/prime/scripts/ws_rpc.py
+/home/ilkhombek4saves/prime/scripts/channels.py
+/home/ilkhombek4saves/prime/scripts/onboard.py
+/home/ilkhombek4saves/prime/scripts/auth.py
+/home/ilkhombek4saves/prime/scripts/security.py
+/home/ilkhombek4saves/prime/lite/service.py
+/home/ilkhombek4saves/prime/lite/README.md
+/home/ilkhombek4saves/prime/lite/secrets.py
+/home/ilkhombek4saves/prime/lite/prime-lite.py
+/home/ilkhombek4saves/prime/lite/update.py
+/home/ilkhombek4saves/prime/docker-compose.prod.yml
+
+
+════════════════════════════════════════════════════════════
+FILE: README.md
+════════════════════════════════════════════════════════════
+# Prime — AI Agent Platform
+
+Multi-channel bot aggregator with provider/plugin orchestration. Inspired by OpenClaw.
+
+## 🚀 Two Modes
+
+### 1. Prime Lite (Recommended for Personal Use)
+**OpenClaw-like experience**: single binary, SQLite, no Docker.
+
+```bash
+./install-lite.sh              # Install
+prime init                     # Initialize
+prime serve                    # Start server
+prime agent "Hello"            # Chat with LLM
+```
+
+**Features:**
+- SQLite database (zero-config)
+- Built-in UI (no build step)
+- Local Ollama support
+- Single CLI: `prime`
+- Systemd/Launchd daemon
+
+See [LITE_MODE.md](LITE_MODE.md) for details.
+
+### 2. Prime Full (Enterprise/Self-hosted)
+**Microservices**: Docker Compose, PostgreSQL, React SPA.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+**Features:**
+- PostgreSQL database
+- React + MUI frontend
+- Multiple channels (Telegram, Discord, WebChat)
+- Horizontal scaling ready
+
+---
+
+## Stack
+- Backend: FastAPI, SQLAlchemy, PostgreSQL/SQLite
+- Frontend: React + MUI (Full) / Built-in (Lite)
+- Infra: Docker Compose (Full) / Python native (Lite)
+
+## Stack
+- Backend: FastAPI, SQLAlchemy, PostgreSQL
+- Frontend: React + MUI + React Router
+- Infra: Docker Compose, GitHub Actions
+
+## Quick start
+1. Copy `.env.example` to `.env` and fill secrets.
+2. Run:
+   ```bash
+   docker compose up --build
+   ```
+3. Backend: `http://localhost:8000/api/healthz`
+4. Frontend: `http://localhost:5173`
+5. DB migrations run automatically at backend startup (`alembic upgrade head`).
+
+## Prime CLI
+From project root you can run:
+```bash
+./prime status
+./prime onboard
+./prime start
+./prime logs
+```
+
+Install global command (`prime`) via:
+```bash
+make install-cli
+```
+
+Then use:
+```bash
+prime status
+prime onboard
+prime shell
+prime gateway status
+prime gateway health
+prime gateway call status --json
+prime channels list
+prime dashboard --open
+prime auth login
+prime auth status
+prime auth whoami
+```
+
+One-line installer (same pattern as OpenClaw):
+```bash
+curl -fsSL https://wgrbojeweoginrb234.duckdns.org/install.sh | bash
+```
+
+Temporary local endpoint (for now):
+```bash
+make installer-up
+curl -fsSL http://localhost:8081/install.sh | PRIME_INSTALL_BASE_URL=http://localhost:8081 bash
+```
+... (126 more lines)
+
+════════════════════════════════════════════════════════════
+FILE: Makefile
+════════════════════════════════════════════════════════════
+# =============================================================================
+#  MultiBot Aggregator — Developer Commands
+#  Usage: make <target>
+# =============================================================================
+
+DOCKER_COMPOSE := docker compose
+PYTHON         := python3
+BACKEND        := backend
+
+.DEFAULT_GOAL := help
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+CYN := \033[96m
+GRN := \033[92m
+YLW := \033[93m
+RED := \033[91m
+WHT := \033[97m
+DIM := \033[2m
+RST := \033[0m
+BLD := \033[1m
+
+.PHONY: help onboard doctor \
+        start stop restart build rebuild \
+        logs logs-all status \
+        shell db installer-up installer-down installer-public-up installer-public-down \
+        test lint migrate install-cli \
+        seed clean
+
+# ── Help ──────────────────────────────────────────────────────────────────────
+help: ## Show this help message
+	@echo ""
+	@echo "$(BLD)$(CYN) ███╗   ███╗██╗   ██╗██╗  ████████╗██╗██████╗  ██████╗ ████████╗$(RST)"
+	@echo "$(BLD)$(CYN) ████╗ ████║██║   ██║██║  ╚══██╔══╝██║██╔══██╗██╔═══██╗╚══██╔══╝$(RST)"
+	@echo "$(BLD)$(CYN) ██╔████╔██║██║   ██║██║     ██║   ██║██████╔╝██║   ██║   ██║   $(RST)"
+	@echo "$(BLD)$(CYN) ██║╚██╔╝██║██║   ██║██║     ██║   ██║██╔══██╗██║   ██║   ██║   $(RST)"
+	@echo "$(BLD)$(CYN) ██║ ╚═╝ ██║╚██████╔╝███████╗██║   ██║██████╔╝╚██████╔╝   ██║   $(RST)"
+	@echo "$(BLD)$(CYN) ╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝╚═════╝  ╚═════╝    ╚═╝   $(RST)"
+	@echo ""
+	@echo "$(DIM) MultiBot Aggregator — AI-powered Telegram bot platform$(RST)"
+	@echo ""
+	@echo "$(BLD)$(WHT)Setup$(RST)"
+	@echo "  $(GRN)make onboard$(RST)      $(DIM)Interactive first-time setup wizard$(RST)"
+	@echo "  $(GRN)make doctor$(RST)       $(DIM)Check system health and service status$(RST)"
+	@echo ""
+	@echo "$(BLD)$(WHT)Services$(RST)"
+	@echo "  $(GRN)make start$(RST)        $(DIM)Start all services (detached)$(RST)"
+	@echo "  $(GRN)make stop$(RST)         $(DIM)Stop all services$(RST)"
+	@echo "  $(GRN)make restart$(RST)      $(DIM)Restart backend (picks up code changes)$(RST)"
+	@echo "  $(GRN)make build$(RST)        $(DIM)Build Docker images$(RST)"
+	@echo "  $(GRN)make rebuild$(RST)      $(DIM)Force-rebuild without cache$(RST)"
+	@echo "  $(GRN)make status$(RST)       $(DIM)Show container status$(RST)"
+	@echo ""
+	@echo "$(BLD)$(WHT)Logs$(RST)"
+	@echo "  $(GRN)make logs$(RST)         $(DIM)Follow backend logs$(RST)"
+	@echo "  $(GRN)make logs-all$(RST)     $(DIM)Follow all service logs$(RST)"
+	@echo ""
+	@echo "$(BLD)$(WHT)Development$(RST)"
+	@echo "  $(GRN)make shell$(RST)        $(DIM)Open bash shell in backend container$(RST)"
+	@echo "  $(GRN)make db$(RST)           $(DIM)Open PostgreSQL interactive shell$(RST)"
+	@echo "  $(GRN)make installer-up$(RST) $(DIM)Start temporary installer endpoint on :8081$(RST)"
+	@echo "  $(GRN)make installer-down$(RST) $(DIM)Stop temporary installer endpoint$(RST)"
+	@echo "  $(GRN)make installer-public-up$(RST) $(DIM)Start public HTTPS installer (80/443)$(RST)"
+	@echo "  $(GRN)make installer-public-down$(RST) $(DIM)Stop public HTTPS installer$(RST)"
+	@echo "  $(GRN)make test$(RST)         $(DIM)Run backend test suite$(RST)"
+	@echo "  $(GRN)make lint$(RST)         $(DIM)Run ruff linter + black formatter check$(RST)"
+	@echo "  $(GRN)make migrate$(RST)      $(DIM)Apply Alembic migrations in backend container$(RST)"
+	@echo "  $(GRN)make install-cli$(RST)  $(DIM)Install 'prime' command into ~/.local/bin$(RST)"
+	@echo "  $(GRN)make seed$(RST)         $(DIM)Seed demo data (dev only)$(RST)"
+	@echo ""
+	@echo "$(BLD)$(WHT)Danger zone$(RST)"
+	@echo "  $(RED)make clean$(RST)        $(DIM)Stop services and wipe all data volumes$(RST)"
+	@echo ""
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+onboard: ## Run the interactive setup wizard
+	@$(PYTHON) scripts/onboard.py
+
+doctor: ## Check system health
+	@$(PYTHON) scripts/onboard.py --doctor
+
+# ── Services ──────────────────────────────────────────────────────────────────
+start: ## Start all services in background
+	@echo "$(CYN)→$(RST) Starting MultiBot Aggregator..."
+	@$(DOCKER_COMPOSE) up -d
+	@echo "$(GRN)✓$(RST) Services started"
+	@echo "  Admin UI:  $(WHT)http://localhost:5173$(RST)"
+	@echo "  API:       $(WHT)http://localhost:8000$(RST)"
+	@echo "  API docs:  $(WHT)http://localhost:8000/docs$(RST)"
+
+stop: ## Stop all services
+	@echo "$(YLW)→$(RST) Stopping services..."
+	@$(DOCKER_COMPOSE) down
+	@echo "$(GRN)✓$(RST) Services stopped"
+
+restart: ## Restart backend service
+	@echo "$(CYN)→$(RST) Restarting backend..."
+	@$(DOCKER_COMPOSE) restart backend
+	@echo "$(GRN)✓$(RST) Backend restarted"
+
+build: ## Build Docker images
+... (70 more lines)
+
+════════════════════════════════════════════════════════════
+FILE: .env.example
+════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# MultiBot — environment configuration
+# Copy this file to .env and fill in every value before deploying.
+# Generate strong secrets with: openssl rand -hex 32
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+# Your domain name (Caddy will auto-obtain a TLS certificate via Let's Encrypt)
+# Examples:  bot.example.com   or   203.0.113.10  (IP = no TLS)
+DOMAIN=your.domain.com
+
+# Application environment (dev | production)
+APP_ENV=production
+APP_HOST=0.0.0.0
+APP_PORT=8000
+
+# ── Database ──────────────────────────────────────────────────────────────────
+# DB_PASSWORD is used by both the postgres container and the backend service.
+# The DATABASE_URL is auto-built in docker-compose.prod.yml — you only need to
+# set it here if you override the compose file or run the backend directly.
+DB_PASSWORD=CHANGE_ME_strong_db_password
+
+DATABASE_URL=postgresql+psycopg://postgres:CHANGE_ME_strong_db_password@db:5432/multibot
+
+# ── Security ──────────────────────────────────────────────────────────────────
+# Generate with: openssl rand -hex 32
+SECRET_KEY=CHANGE_ME_run_openssl_rand_hex_32
+JWT_SECRET=CHANGE_ME_run_openssl_rand_hex_32
+
+# Gateway WebSocket auth (OpenClaw-style password mode)
+# If set, WS clients may authenticate with `prime gateway --password ...`.
+# Recommended: keep WS_ALLOW_REMOTE=false and connect via localhost / SSH tunnel.
+GATEWAY_PASSWORD=
+
+# WebSocket remote access policy
+# Set true only if you understand the exposure (use firewall / reverse proxy hardening).
+WS_ALLOW_REMOTE=false
+
+# JWT token lifetimes
+ACCESS_TOKEN_TTL_MINUTES=60
+REFRESH_TOKEN_TTL_MINUTES=20160
+DEVICE_AUTH_TTL_SECONDS=900
+DEVICE_AUTH_POLL_INTERVAL_SECONDS=3
+
+# ── Public URL (used in device auth flow) ─────────────────────────────────────
+APP_PUBLIC_URL=https://your.domain.com
+
+# ── Telegram ──────────────────────────────────────────────────────────────────
+# Comma-separated list of bot tokens from @BotFather
+TELEGRAM_BOT_TOKENS=
+
+# ── LLM providers (fill in the ones you use) ──────────────────────────────────
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+ANTHROPIC_AUTH_TOKEN=
+ANTHROPIC_BASE_URL=
+MISTRAL_API_KEY=
+DEEPSEEK_API_KEY=
+QWEN_API_KEY=
+KIMI_API_KEY=
+ZAI_API_KEY=
+# Local Ollama (optional)
+OLLAMA_API_BASE=http://host.docker.internal:11434/v1
+OLLAMA_MODEL=llama3.2
+
+# ── Object storage (optional, for file uploads) ───────────────────────────────
+S3_ENDPOINT=
+S3_BUCKET=
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+
+# ── Research/web-search settings ──────────────────────────────────────────────
+RESEARCH_PROXY_POOL=
+RESEARCH_CACHE_TTL_SECONDS=120
+RESEARCH_HTTP_TIMEOUT_SECONDS=12
+RESEARCH_MAX_RETRIES=3
+RESEARCH_PER_HOST_DELAY_MS=450
+RESEARCH_ENRICH_RESULTS=2
+
+# ── Discord (optional) ──────────────────────────────────────────────────────
+# JSON array of bot configs: [{"name":"my_bot","token":"..."}]
+DISCORD_BOT_CONFIGS=
+
+# ── WebChat (optional) ─────────────────────────────────────────────────────
+WEBCHAT_ENABLED=true
+
+# ── Auto onboarding ────────────────────────────────────────────────────────
+# Set for `prime onboard --auto` to auto-create admin user
+PRIME_ADMIN_PASSWORD=
+
+
+════════════════════════════════════════════════════════════
+GIT INFO
+════════════════════════════════════════════════════════════
+Branch: main
+
+Recent commits:
+abf7f07 Add API support (OpenAI/Anthropic) and project analysis mode
+de57734 WIP: New OpenClaw-compatible agent with full tool-calling
+54f96de Add qwen2.5:7b support and raw/full output mode for prime agent
+8669b19 Fix prime agent tool access - auto-execute file operations
+17666f8 Add OpenClaw-like tools: edit, memory, sessions, cron, browser stubs
+ec87613 Remove SQLite db file, ignore *.db
+65d1547 Initial commit — MultiBot platform

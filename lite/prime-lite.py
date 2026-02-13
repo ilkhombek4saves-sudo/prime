@@ -372,6 +372,19 @@ def cmd_agent(args):
     
     workspace = os.environ.get("PRIME_WORKSPACE", os.getcwd())
     
+    # Check if analysis file exists and user asks about project
+    analysis_file = Path(workspace) / ".prime_analysis.txt"
+    if analysis_file.exists() and any(k in args.message.lower() for k in ["analyze", "проанализируй", "изучи", "summarize", "опиши", "проект"]):
+        log("Loading pre-generated analysis...")
+        analysis = analysis_file.read_text(encoding='utf-8')
+        # Add analysis context to message
+        args.message = f"""Based on the following project analysis, answer the user's question.
+
+PROJECT ANALYSIS:
+{analysis[:15000]}
+
+USER QUESTION: {args.message}"""
+    
     runner = AgentRunner(model, workspace, provider)
     log(f"Prime -> {provider}/{model}")
     print()
@@ -411,6 +424,78 @@ def get_ollama_models():
         return []
 
 
+def cmd_analyze(args):
+    """Direct project analysis without waiting for LLM"""
+    banner()
+    
+    workspace = Path(args.path).resolve()
+    if not workspace.exists():
+        error(f"Path not found: {args.path}")
+        return
+    
+    log(f"Analyzing: {workspace}")
+    print()
+    
+    # Collect project info directly
+    result = []
+    
+    # 1. Directory structure
+    result.append("═" * 60)
+    result.append("PROJECT STRUCTURE")
+    result.append("═" * 60)
+    
+    try:
+        import subprocess
+        tree_cmd = f"find {workspace} -maxdepth {args.depth} -type f \( -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.json' -o -name '*.md' -o -name '*.yaml' -o -name '*.yml' -o -name '*.toml' -o -name 'Makefile' -o -name 'Dockerfile' \) 2>/dev/null | head -100"
+        files = subprocess.run(tree_cmd, shell=True, capture_output=True, text=True).stdout
+        result.append(files if files else "(no files found)")
+    except Exception as e:
+        result.append(f"Error: {e}")
+    
+    # 2. Key files content
+    key_files = ["README.md", "package.json", "pyproject.toml", "setup.py", "requirements.txt", "Cargo.toml", "Makefile", "Dockerfile", ".env.example"]
+    
+    for fname in key_files:
+        fpath = workspace / fname
+        if fpath.exists():
+            result.append("\n" + "═" * 60)
+            result.append(f"FILE: {fname}")
+            result.append("═" * 60)
+            try:
+                content = fpath.read_text(encoding='utf-8', errors='ignore')
+                # Limit content
+                lines = content.splitlines()
+                if len(lines) > 100:
+                    content = '\n'.join(lines[:100]) + f"\n... ({len(lines)-100} more lines)"
+                result.append(content)
+            except Exception as e:
+                result.append(f"Error reading: {e}")
+    
+    # 3. Git info
+    git_dir = workspace / ".git"
+    if git_dir.exists():
+        result.append("\n" + "═" * 60)
+        result.append("GIT INFO")
+        result.append("═" * 60)
+        try:
+            git_log = subprocess.run(f"cd {workspace} && git log --oneline -10 2>/dev/null", shell=True, capture_output=True, text=True).stdout
+            git_branch = subprocess.run(f"cd {workspace} && git branch --show-current 2>/dev/null", shell=True, capture_output=True, text=True).stdout
+            result.append(f"Branch: {git_branch.strip()}")
+            result.append(f"\nRecent commits:\n{git_log}")
+        except Exception as e:
+            result.append(f"Error: {e}")
+    
+    # Print result
+    output = '\n'.join(result)
+    print(output)
+    
+    # Save to file for LLM analysis
+    analysis_file = workspace / ".prime_analysis.txt"
+    analysis_file.write_text(output, encoding='utf-8')
+    print(f"\n  {BLU}→{R} Analysis saved to: {analysis_file}")
+    print(f"  {BLU}→{R} Now you can: prime agent 'Summarize the project analysis'")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="prime", description="Prime Agent")
     sub = parser.add_subparsers(dest="cmd")
@@ -422,12 +507,18 @@ def main():
     
     sub.add_parser("status", help="Check status")
     
+    analyze = sub.add_parser("analyze", help="Analyze project structure")
+    analyze.add_argument("--path", default=".", help="Path to analyze")
+    analyze.add_argument("--depth", type=int, default=3, help="Directory depth")
+    
     args = parser.parse_args()
     
     if args.cmd == "agent":
         cmd_agent(args)
     elif args.cmd == "status":
         cmd_status(args)
+    elif args.cmd == "analyze":
+        cmd_analyze(args)
     else:
         banner()
         parser.print_help()
