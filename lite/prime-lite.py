@@ -34,6 +34,74 @@ def ok(msg): print(f"  {GRN}✓{R} {msg}")
 def warn(msg): print(f"  {YLW}!{R} {msg}")
 
 
+def _scan_projects():
+    """Scan workspace for projects"""
+    projects = []
+    workspace = Path(os.environ.get("PRIME_WORKSPACE", os.getcwd()))
+    
+    # Project markers
+    markers = {
+        ".git": "Git Repo",
+        "package.json": "Node.js",
+        "pyproject.toml": "Python",
+        "setup.py": "Python",
+        "requirements.txt": "Python",
+        "Cargo.toml": "Rust",
+        "go.mod": "Go",
+        "pom.xml": "Java/Maven",
+        "build.gradle": "Java/Gradle",
+        "composer.json": "PHP",
+        "Gemfile": "Ruby",
+        "mix.exs": "Elixir",
+    }
+    
+    # Check current directory first
+    for marker, ptype in markers.items():
+        if (workspace / marker).exists():
+            project = {
+                "name": workspace.name,
+                "path": str(workspace),
+                "type": ptype,
+            }
+            # Get git branch if it's a git repo
+            if marker == ".git" or (workspace / ".git").exists():
+                try:
+                    r = subprocess.run(
+                        f"cd {workspace} && git branch --show-current 2>/dev/null",
+                        shell=True, capture_output=True, text=True
+                    )
+                    project["git_branch"] = r.stdout.strip()
+                except:
+                    pass
+            projects.append(project)
+            break
+    
+    # Check subdirectories (one level deep)
+    if not projects:
+        for subdir in workspace.iterdir():
+            if subdir.is_dir() and not subdir.name.startswith("."):
+                for marker, ptype in markers.items():
+                    if (subdir / marker).exists():
+                        project = {
+                            "name": subdir.name,
+                            "path": str(subdir),
+                            "type": ptype,
+                        }
+                        if marker == ".git" or (subdir / ".git").exists():
+                            try:
+                                r = subprocess.run(
+                                    f"cd {subdir} && git branch --show-current 2>/dev/null",
+                                    shell=True, capture_output=True, text=True
+                                )
+                                project["git_branch"] = r.stdout.strip()
+                            except:
+                                pass
+                        projects.append(project)
+                        break
+    
+    return projects
+
+
 class FastRouter:
     """Fast rule-based router without LLM preprocessing"""
     
@@ -56,6 +124,18 @@ class FastRouter:
         if any(kw in q_lower for kw in ["ls ", "dir ", "list files", "what files", "show files"]):
             log("Fast path: direct directory listing")
             return "direct", [], self._list_directory()
+        
+        # FAST PATH: Projects scanning
+        if any(kw in q_lower for kw in ["projects", "проекты", "what projects", "какие проекты"]):
+            log("Fast path: scanning projects")
+            projects = _scan_projects()
+            output = ["📁 PROJECTS FOUND:"]
+            for p in projects:
+                output.append(f"\n  {p['name']} ({p['type']})")
+                output.append(f"  Path: {p['path']}")
+                if p.get('git_branch'):
+                    output.append(f"  Branch: {p['git_branch']}")
+            return "direct", [], "\n".join(output)
         
         # FAST PATH: Direct file reading for "read/show/cat <file>" commands
         read_match = re.search(r'(?:read|show|cat|open)\s+[\'"]?([\w\-.\/]+\.[\w]+)[\'"]?', query, re.IGNORECASE)
@@ -189,9 +269,8 @@ Git context:
         """Execute on selected providers"""
         print(f"\n{BOLD}{CYN}══════ EXECUTION ══════{R}")
         
-        # Direct output (no LLM)
+        # Direct output (no LLM) - just return, printing done in main
         if decision == "direct":
-            print(f"\n{BOLD}{GRN}Response:{R}\n{context}\n")
             return context
         
         if decision in ["local", "simple"]:
@@ -369,74 +448,6 @@ def cmd_status():
         warn("No projects found in current directory")
     
     print()
-
-
-def _scan_projects():
-    """Scan workspace for projects"""
-    projects = []
-    workspace = Path(os.environ.get("PRIME_WORKSPACE", os.getcwd()))
-    
-    # Project markers
-    markers = {
-        ".git": "Git Repo",
-        "package.json": "Node.js",
-        "pyproject.toml": "Python",
-        "setup.py": "Python",
-        "requirements.txt": "Python",
-        "Cargo.toml": "Rust",
-        "go.mod": "Go",
-        "pom.xml": "Java/Maven",
-        "build.gradle": "Java/Gradle",
-        "composer.json": "PHP",
-        "Gemfile": "Ruby",
-        "mix.exs": "Elixir",
-    }
-    
-    # Check current directory first
-    for marker, ptype in markers.items():
-        if (workspace / marker).exists():
-            project = {
-                "name": workspace.name,
-                "path": str(workspace),
-                "type": ptype,
-            }
-            # Get git branch if it's a git repo
-            if marker == ".git" or (workspace / ".git").exists():
-                try:
-                    r = subprocess.run(
-                        f"cd {workspace} && git branch --show-current 2>/dev/null",
-                        shell=True, capture_output=True, text=True
-                    )
-                    project["git_branch"] = r.stdout.strip()
-                except:
-                    pass
-            projects.append(project)
-            break
-    
-    # Check subdirectories (one level deep)
-    if not projects:
-        for subdir in workspace.iterdir():
-            if subdir.is_dir() and not subdir.name.startswith("."):
-                for marker, ptype in markers.items():
-                    if (subdir / marker).exists():
-                        project = {
-                            "name": subdir.name,
-                            "path": str(subdir),
-                            "type": ptype,
-                        }
-                        if marker == ".git" or (subdir / ".git").exists():
-                            try:
-                                r = subprocess.run(
-                                    f"cd {subdir} && git branch --show-current 2>/dev/null",
-                                    shell=True, capture_output=True, text=True
-                                )
-                                project["git_branch"] = r.stdout.strip()
-                            except:
-                                pass
-                        projects.append(project)
-                        break
-    
-    return projects
 
 
 def cmd_init():
