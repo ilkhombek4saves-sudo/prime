@@ -34,7 +34,7 @@ def warn(msg): print(f"  {YLW}!{R} {msg}")
 class FastRouter:
     """Fast rule-based router without LLM preprocessing"""
     
-    LOCAL_MODEL = "qwen2.5:14b"
+    LOCAL_MODEL = "qwen2.5:7b"  # Faster on CPU
     
     def __init__(self):
         self.workspace = WORKSPACE
@@ -42,21 +42,31 @@ class FastRouter:
     def analyze_and_route(self, query: str) -> Tuple[str, List[str], str]:
         """
         Returns: (routing_decision, providers, prepared_context)
-        Decision: local/simple/complex/code/arch/critical
+        Decision: local/simple/complex/code/arch/critical/direct
         """
         print(f"\n{BOLD}{CYN}══════ PRIME ROUTER ══════{R}")
         
-        # 1. Extract files (fast regex)
-        files = self._extract_files(query)
-        
-        # 2. Read files (direct disk access)
+        q_lower = query.lower()
         context_parts = []
+        
+        # 0. FAST PATH: Direct execution for simple commands (no LLM)
+        if any(kw in q_lower for kw in ["ls ", "dir ", "list files", "what files", "show files"]):
+            log("Fast path: direct directory listing")
+            return "direct", [], self._list_directory()
+        
+        # 1. Check for directory listing request (with LLM analysis)
+        dir_keywords = ["directory", "what's in", "what is in", "files in"]
+        if any(kw in q_lower for kw in dir_keywords):
+            log("Detected directory listing request")
+            dir_listing = self._list_directory()
+            context_parts.append(f"=== DIRECTORY LISTING ===\n{dir_listing}")
+        
+        # 2. Extract and read specific files
+        files = self._extract_files(query)
         for f in files[:3]:
             content = self._read_file(f)
             if content:
                 context_parts.append(f"=== {f} ===\n{content[:1500]}")
-        
-        file_context = "\n\n".join(context_parts)
         
         # 3. Rule-based complexity detection
         decision = self._classify(query)
@@ -65,9 +75,13 @@ class FastRouter:
         providers = self._select_providers(decision)
         
         # 5. Prepare final context
+        file_context = "\n\n".join(context_parts) or "(no specific files or directories requested)"
+        
         context = f"""Query: {query}
 
-Files analyzed:
+Workspace: {self.workspace}
+
+Context:
 {file_context}
 
 Git context:
@@ -77,6 +91,17 @@ Git context:
         log(f"Providers: {', '.join(providers)}")
         
         return decision, providers, context
+    
+    def _list_directory(self) -> str:
+        """List files in workspace directory"""
+        try:
+            result = subprocess.run(
+                f"ls -la {self.workspace}",
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            return result.stdout[:3000]  # Limit output
+        except Exception as e:
+            return f"Error listing directory: {e}"
     
     def _classify(self, query: str) -> str:
         """Rule-based classification (no LLM)"""
@@ -151,6 +176,11 @@ Git context:
     def execute(self, decision: str, providers: List[str], context: str) -> str:
         """Execute on selected providers"""
         print(f"\n{BOLD}{CYN}══════ EXECUTION ══════{R}")
+        
+        # Direct output (no LLM)
+        if decision == "direct":
+            print(f"\n{BOLD}{GRN}Response:{R}\n{context}\n")
+            return context
         
         if decision in ["local", "simple"]:
             return self._execute_local(context)
