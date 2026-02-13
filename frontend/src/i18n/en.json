@@ -1,0 +1,12 @@
+{
+  "login": "Login",
+  "dashboard": "Dashboard",
+  "bots": "Bots",
+  "providers": "Providers",
+  "plugins": "Plugins",
+  "sessions": "Sessions",
+  "tasks": "Tasks",
+  "users": "Users",
+  "settings": "Settings",
+  "chat": "Chat"
+}

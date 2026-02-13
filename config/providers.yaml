@@ -1,0 +1,61 @@
+version: 1
+providers:
+- name: glm_default
+  type: GLM
+  api_key: ${ZAI_API_KEY}
+  api_base: https://api.z.ai/v1/
+  default_model: glm-4.7
+  models:
+    glm-4.7:
+      max_tokens: 8192
+      cost_per_1m_input: 0.6
+      cost_per_1m_output: 2.2
+  thinking_enabled: true
+  rate_limits:
+    rpm: 120
+    tpm: 200000
+  active: true
+
+- name: openai_default
+  type: OpenAI
+  api_key: ${OPENAI_API_KEY}
+  api_base: https://api.openai.com/v1/
+  default_model: gpt-4o
+  models:
+    gpt-4o:
+      max_tokens: 4096
+      cost_per_1k_input: 0.01
+      cost_per_1k_output: 0.03
+    gpt-4o-mini:
+      max_tokens: 4096
+      cost_per_1k_input: 0.00015
+      cost_per_1k_output: 0.0006
+  token_optimization:
+    auto_route_enabled: true
+    route_by_complexity:
+      simple: gpt-4o-mini
+      complex: gpt-4o
+    input_budget_tokens: 6000
+    max_output_tokens: 1024
+    max_message_tokens: 1200
+    output_to_input_ratio: 1.8
+  thinking_enabled: false
+  rate_limits:
+    rpm: 300
+    tpm: 120000
+  active: true
+
+- name: shell_default
+  type: Shell
+  allowed_scripts: [deploy.sh, test.sh, backup.sh]
+  models:
+    shell-local:
+      max_tokens: 0
+  humanization:
+    enabled: true
+    think_delay_min_ms: 120
+    think_delay_max_ms: 520
+    max_total_delay_ms: 1200
+    chunk_chars_min: 12
+    chunk_chars_max: 30
+  active: true

@@ -1,0 +1,19 @@
+# ─── Stage 1: build ───────────────────────────────────────────────────────────
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+
+COPY frontend/package.json frontend/package-lock.json* ./
+# Install deps + platform-specific rollup native binary (needed on Linux)
+RUN npm ci --include=optional \
+    && ROLLUP_VERSION=$(node -p "require('./node_modules/rollup/package.json').version") \
+    && ROLLUP_PKG=$(node -p "const libc = (process.report?.getReport()?.header?.glibcVersionRuntime ? 'gnu' : 'musl'); '@rollup/rollup-linux-' + process.arch + '-' + libc") \
+    && npm install --no-save "${ROLLUP_PKG}@${ROLLUP_VERSION}"
+
+COPY frontend/ ./
+RUN npm run build
+
+# ─── Stage 2: serve static files with nginx ───────────────────────────────────
+FROM nginx:1.27-alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY infrastructure/nginx/spa.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

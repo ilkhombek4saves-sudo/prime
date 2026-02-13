@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: multibot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d multibot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: always
+    env_file: .env
+    # Override DATABASE_URL so it uses the DB_PASSWORD env var.
+    # This takes precedence over the value in .env.
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${DB_PASSWORD}@db:5432/multibot
+      APP_ENV: production
+    # Run migrations then start uvicorn with 2 workers for better concurrency
+    command: >
+      sh -c "alembic upgrade head &&
+             exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.prod
+    restart: always
+
+  landing:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.prod
+    restart: always
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: always
+    depends_on:
+      - backend
+      - frontend
+      - landing
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env (e.g. DOMAIN=yourdomain.com)}
+    volumes:
+      - ./install.sh:/srv/install.sh:ro
+      - ./prime:/srv/prime:ro
+      - ./infrastructure/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pg_data:
+  caddy_data:
+  caddy_config:

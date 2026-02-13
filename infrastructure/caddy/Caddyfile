@@ -1,0 +1,66 @@
+wgrbojeweoginrb234.duckdns.org {
+    # ── Install scripts (highest priority, served from file) ───────────────────
+    @install path /install.sh
+    handle @install {
+        root * /srv
+        header Content-Type "text/plain; charset=utf-8"
+        header Cache-Control "no-store"
+        file_server
+    }
+
+    @prime path /prime
+    handle @prime {
+        root * /srv
+        header Content-Type "text/plain; charset=utf-8"
+        header Cache-Control "no-store"
+        file_server
+    }
+
+    # ── API backend ────────────────────────────────────────────────────────────
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # ── Admin dashboard (/dashboard → frontend, strip prefix) ─────────────────
+    handle /dashboard* {
+        uri strip_prefix /dashboard
+        reverse_proxy frontend:5173
+    }
+
+    # ── Landing page (catch-all) ───────────────────────────────────────────────
+    handle {
+        reverse_proxy landing:3000
+    }
+}
+
+# Local HTTP (no TLS) — same routing without domain constraint
+:80 {
+    @install path /install.sh
+    handle @install {
+        root * /srv
+        header Content-Type "text/plain; charset=utf-8"
+        header Cache-Control "no-store"
+        file_server
+    }
+
+    @prime path /prime
+    handle @prime {
+        root * /srv
+        header Content-Type "text/plain; charset=utf-8"
+        header Cache-Control "no-store"
+        file_server
+    }
+
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    handle /dashboard* {
+        uri strip_prefix /dashboard
+        reverse_proxy frontend:5173
+    }
+
+    handle {
+        reverse_proxy landing:3000
+    }
+}

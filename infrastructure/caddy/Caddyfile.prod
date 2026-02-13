@@ -1,0 +1,34 @@
+{$DOMAIN} {
+    # ── Install scripts (highest priority, served from file) ───────────────────
+    @install path /install.sh
+    handle @install {
+        root * /srv
+        header Content-Type "text/plain; charset=utf-8"
+        header Cache-Control "no-store"
+        file_server
+    }
+
+    @prime path /prime
+    handle @prime {
+        root * /srv
+        header Content-Type "text/plain; charset=utf-8"
+        header Cache-Control "no-store"
+        file_server
+    }
+
+    # ── API backend (includes WebSocket at /api/ws/*) ──────────────────────────
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # ── Admin dashboard (/dashboard → frontend, strip prefix) ─────────────────
+    handle /dashboard* {
+        uri strip_prefix /dashboard
+        reverse_proxy frontend:80
+    }
+
+    # ── Landing page (catch-all) ───────────────────────────────────────────────
+    handle {
+        reverse_proxy landing:80
+    }
+}

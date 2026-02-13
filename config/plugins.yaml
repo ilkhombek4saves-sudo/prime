@@ -1,0 +1,40 @@
+version: 1
+plugins:
+- name: deploy
+  description: Deploy service by shell script
+  provider: shell_default
+  command: deploy.sh
+  params_schema:
+    type: object
+    required: [service_name, git_branch]
+    properties:
+      service_name: {type: string}
+      git_branch: {type: string}
+  permissions: [admin]
+  allowed_bots: [ops_bot]
+
+- name: test
+  description: Run test suites
+  provider: shell_default
+  command: test.sh
+  params_schema:
+    type: object
+    required: [suite]
+    properties:
+      suite: {type: string, enum: [unit, integration, all]}
+  permissions: [admin, user]
+  allowed_bots: [ops_bot, support_bot]
+
+- name: slides
+  description: Generate 16:9 slides
+  provider: glm_default
+  command:
+    capability: generate_slides
+  params_schema:
+    type: object
+    required: [topic, slides_count]
+    properties:
+      topic: {type: string}
+      slides_count: {type: integer}
+  permissions: [admin, user]
+  allowed_bots: [support_bot]
