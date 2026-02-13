@@ -475,9 +475,13 @@ def cmd_agent(args):
         return "\n".join(lines) or "(empty)"
     
     def read_file(path):
+        if not path:
+            return "Error: no file path provided"
         p = Path(workspace_path) / path
         if not p.exists():
             return f"Error: file not found: {path}"
+        if p.is_dir():
+            return f"Error: {path} is a directory, not a file"
         return p.read_text(encoding="utf-8")[:8000]
     
     def run_command(command):
@@ -488,50 +492,134 @@ def cmd_agent(args):
         except Exception as e:
             return f"Error: {e}"
     
-    # Simple chat without complex tool loop
-    messages = [
-        {"role": "system", "content": f"You are Prime, an AI assistant. The user's workspace is at: {workspace_path}"},
-        {"role": "user", "content": args.message}
+    # Tool definitions for Ollama native tool-calling
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List files and directories in the workspace. Use path='.' for current directory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path (use '.' for current directory)"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read the contents of a file. Provide the full file path.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "File path to read (e.g., 'README.md')"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "Execute a shell command in the workspace",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Shell command to execute"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        }
     ]
     
-    req_data = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
+    def execute_tool_call(name, arguments):
+        """Execute a tool call by name"""
+        if name == "list_files":
+            return list_files(arguments.get("path", "."))
+        elif name == "read_file":
+            return read_file(arguments.get("path", ""))
+        elif name == "run_command":
+            return run_command(arguments.get("command", ""))
+        return f"Unknown tool: {name}"
     
-    req = urllib.request.Request(
-        "http://localhost:11434/api/chat",
-        data=json.dumps(req_data).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
+    # Simple chat with auto tool execution
+    messages = [
+        {"role": "system", "content": f"You are Prime, an AI assistant. You have direct access to the workspace at: {workspace_path}. When the user asks about files, you will receive the file information automatically. Respond naturally based on the provided data."},
+        {"role": "user", "content": args.message}
+    ]
     
     log(f"Prime -> {model}")
     print()
     
+    # Check if user wants raw/full output
+    show_raw = any(k in args.message.lower() for k in ["raw", "full", "cat ", "content:"])
+    
     try:
+        # First, check if we need to auto-execute tools based on message
+        msg_lower = args.message.lower()
+        tool_result = None
+        tool_name = None
+        
+        if any(k in msg_lower for k in ["list file", "what files", "show files", "directory content", "ls "]):
+            tool_name = "list_files"
+            tool_result = list_files()
+        elif "read " in msg_lower or "open " in msg_lower or "show" in msg_lower or "cat " in msg_lower:
+            # Extract filename from original message (preserve case) - skip common words
+            import re
+            fname_match = re.search(r'(?:read|open|show|cat)\s+(?:the\s+)?(?:file\s+)?(?:full\s+|raw\s+)?["\']?([\w\-.\/]+(?:\.[\w]+)?)["\']?', args.message, re.IGNORECASE)
+            if fname_match:
+                tool_name = "read_file"
+                filename = fname_match.group(1)
+                tool_result = read_file(filename)
+        elif "run " in msg_lower or "execute " in msg_lower or "command:" in msg_lower:
+            cmd_match = re.search(r'(?:run|execute)\s+[\"\']?([^\"\']+)[\"\']?', args.message, re.IGNORECASE)
+            if cmd_match:
+                tool_name = "run_command"
+                tool_result = run_command(cmd_match.group(1))
+        
+        # If tool was executed, handle output
+        if tool_result:
+            log(f"Tool: {tool_name}")
+            
+            # If user wants raw output, show it directly without LLM
+            if show_raw:
+                print(f"\n{tool_result}\n")
+                return
+            
+            messages.append({
+                "role": "user", 
+                "content": f"[SYSTEM: The following is the result of {tool_name}]\n\n{tool_result}\n\nPlease respond to the user based on this information. If the user asked to see a file, quote the relevant parts or summarize."
+            })
+        
+        req_data = {
+            "model": model,
+            "messages": messages,
+            "stream": False
+        }
+        
+        req = urllib.request.Request(
+            "http://localhost:11434/api/chat",
+            data=json.dumps(req_data).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode())
-            response = data.get("message", {}).get("content", "")
-            
-            # Check if user is asking for file operations and auto-execute
-            msg_lower = args.message.lower()
-            if any(k in msg_lower for k in ["list file", "show file", "what files", "directory contents"]):
-                files = list_files()
-                response += f"\n\n[Prime accessed your workspace]\n{files}"
-            elif msg_lower.startswith("read ") or "read file" in msg_lower:
-                # Try to extract filename
-                import re
-                fname_match = re.search(r'[\s\"\']([\w\-.]+\.[\w]+)[\s\"\']?', args.message)
-                if fname_match:
-                    content = read_file(fname_match.group(1))
-                    response += f"\n\n[Prime read file]\n{content[:2000]}"
-            
-            print(response)
+            content = data.get("message", {}).get("content", "")
+            print(content)
             print()
+            
     except Exception as e:
         error(f"Request failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # Simple dashboard HTML
