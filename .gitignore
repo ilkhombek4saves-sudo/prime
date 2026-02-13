@@ -37,6 +37,10 @@ app/dist/
 # Docker
 *.log
 
+# SQLite (dev artifact, not used in production)
+*.db
+*.sqlite
+
 # Alembic
 backend/alembic/versions/__pycache__/
 
