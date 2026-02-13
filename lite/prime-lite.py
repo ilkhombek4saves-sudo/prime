@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import List, Tuple
 
 WORKSPACE = Path(os.environ.get("PRIME_WORKSPACE", os.getcwd()))
+CONFIG_DIR = Path.home() / ".config" / "prime"
+CONFIG_FILE = CONFIG_DIR / "config.yaml"
+ENV_FILE = CONFIG_DIR / ".env"
 
 R = "\033[0m"
 BOLD = "\033[1m"
@@ -322,20 +325,104 @@ Git context:
             return ""
 
 
+def cmd_status():
+    """Show system status"""
+    print(f"\n{BOLD}{CYN}══════ PRIME STATUS ══════{R}\n")
+    
+    # Check config
+    if CONFIG_FILE.exists():
+        ok(f"Config: {CONFIG_FILE}")
+    else:
+        warn(f"Config not found: {CONFIG_FILE}")
+    
+    # Check Ollama
+    try:
+        import urllib.request
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+        
+        # Get models
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as r:
+            import json
+            data = json.loads(r.read().decode())
+            models = [m["name"] for m in data.get("models", [])]
+            ok(f"Ollama running: {len(models)} models")
+            for m in models[:5]:
+                print(f"       - {m}")
+    except Exception as e:
+        error(f"Ollama not running: {e}")
+    
+    # Check env
+    if ENV_FILE.exists():
+        ok(f"Environment: {ENV_FILE}")
+    
+    print()
+
+
+def cmd_init():
+    """Initialize Prime"""
+    print(f"\n{BOLD}{CYN}══════ PRIME INIT ══════{R}\n")
+    
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    ok(f"Config directory: {CONFIG_DIR}")
+    
+    # Create .env if not exists
+    if not ENV_FILE.exists():
+        import secrets
+        env_content = f"""# Prime Environment
+SECRET_KEY={secrets.token_hex(32)}
+APP_ENV=production
+# Add API keys below:
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
+"""
+        ENV_FILE.write_text(env_content)
+        ENV_FILE.chmod(0o600)
+        ok(f"Created .env: {ENV_FILE}")
+    
+    print(f"\n{BOLD}{GRN}Prime initialized!{R}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="prime", description="Prime Router v2")
-    parser.add_argument("query", nargs="?", default="", help="Query to process")
+    parser.add_argument("query", nargs="?", default="", help="Query to process or command")
     
     args = parser.parse_args()
     
+    # CLI commands (not LLM queries)
+    if args.query == "status":
+        cmd_status()
+        return
+    
+    if args.query == "init":
+        cmd_init()
+        return
+    
+    if args.query == "help":
+        parser.print_help()
+        print(f"\n{BOLD}CLI Commands:{R}")
+        print("  prime status       Show system status")
+        print("  prime init         Initialize Prime")
+        print("  prime <query>      Send query to AI agent")
+        print("\n{BOLD}Examples:{R}")
+        print('  prime "What files are here?"')
+        print('  prime "Read README.md"')
+        print('  prime "Explain the code"')
+        return
+    
     if not args.query:
         # Interactive mode
-        print(f"{BOLD}{CYN}Prime Router v2 — Type 'exit' to quit{R}\n")
+        print(f"{BOLD}{CYN}Prime Router v2 — Type 'exit' to quit, 'help' for commands{R}\n")
         while True:
             try:
                 query = input(f"{CYN}>>{R} ")
                 if query.lower() in ["exit", "quit"]:
                     break
+                if query.lower() == "status":
+                    cmd_status()
+                    continue
+                if query.lower() == "init":
+                    cmd_init()
+                    continue
                 if not query.strip():
                     continue
                 
@@ -349,6 +436,7 @@ def main():
             except Exception as e:
                 print(f"{RED}Error: {e}{R}")
     else:
+        # Process query through router
         router = FastRouter()
         decision, providers, context = router.analyze_and_route(args.query)
         response = router.execute(decision, providers, context)
