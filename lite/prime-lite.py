@@ -431,8 +431,18 @@ def cmd_stop(args):
         warn("No PID file found. Is server running?")
 
 
+SYSTEM_PROMPT = '''You are Prime, an AI assistant. You have access to tools to interact with the filesystem.
+
+When you need to read, write, or list files, ask the user for permission first. For example:
+"I can help you with that. To proceed, I'll need to list the files in your workspace. May I do that?"
+
+If the user agrees, indicate you want to use a tool by saying:
+"I'll use the list_files tool now."
+
+The system will execute the tool and show you the results. Then respond to the user with what you found.'''
+
 def cmd_agent(args):
-    """Send message to agent with tool support (like OpenClaw)"""
+    """Send message to agent (interactive mode)"""
     load_env()
     
     if not args.message:
@@ -447,192 +457,79 @@ def cmd_agent(args):
     import urllib.request
     import json
     import os
+    import subprocess
     from pathlib import Path
     
     model = args.model or "llama3.2"
-    workspace_path = os.environ.get("PRIME_WORKSPACE", ".")
+    workspace_path = os.environ.get("PRIME_WORKSPACE", os.getcwd())
+    Path(workspace_path).mkdir(parents=True, exist_ok=True)
     
-    # Tool definitions (subset that works well with local models)
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "Create or overwrite a file in the workspace",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Relative file path"},
-                        "content": {"type": "string", "description": "File content"},
-                    },
-                    "required": ["path", "content"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read the contents of a file from the workspace",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Relative file path"},
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_files",
-                "description": "List all files and directories in the workspace",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Subdirectory (default: root)"},
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "run_command",
-                "description": "Run a shell command in the workspace directory",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {"type": "string", "description": "Shell command"},
-                    },
-                    "required": ["command"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_web",
-                "description": "Search the web using DuckDuckGo",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"},
-                    },
-                    "required": ["query"],
-                },
-            },
-        },
-    ]
+    # Tools available
+    def list_files(path="."):
+        p = Path(workspace_path) / path
+        if not p.exists():
+            return f"Error: directory not found"
+        lines = []
+        for item in sorted(p.iterdir()):
+            lines.append(("[dir]  " if item.is_dir() else "[file] ") + item.name)
+        return "\n".join(lines) or "(empty)"
     
-    def execute_tool(name, arguments):
-        """Execute a tool call"""
+    def read_file(path):
+        p = Path(workspace_path) / path
+        if not p.exists():
+            return f"Error: file not found: {path}"
+        return p.read_text(encoding="utf-8")[:8000]
+    
+    def run_command(command):
         try:
-            if name == "write_file":
-                p = Path(workspace_path) / arguments["path"]
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(arguments["content"], encoding="utf-8")
-                return f"OK: written {arguments['path']}"
-            elif name == "read_file":
-                p = Path(workspace_path) / arguments["path"]
-                if not p.exists():
-                    return f"Error: file not found: {arguments['path']}"
-                return p.read_text(encoding="utf-8")[:4000]
-            elif name == "list_files":
-                p = Path(workspace_path) / arguments.get("path", ".")
-                if not p.exists():
-                    return f"Error: directory not found"
-                lines = []
-                for item in sorted(p.rglob("*")):
-                    rel = item.relative_to(workspace_path)
-                    lines.append(("[dir]  " if item.is_dir() else "[file] ") + str(rel))
-                return "\n".join(lines[:50]) or "(empty)"
-            elif name == "run_command":
-                import subprocess
-                r = subprocess.run(
-                    arguments["command"],
-                    shell=True, capture_output=True, text=True,
-                    cwd=workspace_path, timeout=60
-                )
-                out = (r.stdout + r.stderr).strip()
-                return out[:2000] or "(no output)"
-            elif name == "search_web":
-                try:
-                    from duckduckgo_search import DDGS
-                    with DDGS() as ddgs:
-                        results = list(ddgs.text(arguments["query"], max_results=5))
-                    if not results:
-                        return "No results found."
-                    lines = []
-                    for r in results:
-                        lines.append(f"- {r.get('title', '')}: {r.get('body', '')[:100]}")
-                    return "\n".join(lines)
-                except Exception as e:
-                    return f"Search error: {e}"
-            else:
-                return f"Unknown tool: {name}"
+            r = subprocess.run(command, shell=True, capture_output=True, text=True, 
+                             cwd=workspace_path, timeout=60)
+            return (r.stdout + r.stderr).strip()[:4000] or "(no output)"
         except Exception as e:
-            return f"Tool error: {e}"
+            return f"Error: {e}"
     
-    def chat_with_tools(messages, max_turns=5):
-        """Chat with tool calling loop"""
-        for turn in range(max_turns):
-            req_data = {
-                "model": model,
-                "messages": messages,
-                "tools": tools,
-                "stream": False
-            }
-            
-            req = urllib.request.Request(
-                "http://localhost:11434/v1/chat/completions",
-                data=json.dumps(req_data).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode())
-                message = data["choices"][0]["message"]
-                
-                # Check if tool calls requested
-                tool_calls = message.get("tool_calls")
-                if tool_calls:
-                    messages.append(message)
-                    for tc in tool_calls:
-                        name = tc["function"]["name"]
-                        try:
-                            args = json.loads(tc["function"]["arguments"])
-                        except:
-                            args = {}
-                        
-                        log(f"Tool: {name}({json.dumps(args)})")
-                        result = execute_tool(name, args)
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": result
-                        })
-                else:
-                    # No tool calls - return final response
-                    return message.get("content", "")
-        
-        return "Max turns reached"
-    
-    log(f"Sending to {model} (with tools)...")
-    print()
-    
+    # Simple chat without complex tool loop
     messages = [
-        {"role": "system", "content": "You are Prime, an AI assistant with access to tools. Use tools when needed to help the user."},
+        {"role": "system", "content": f"You are Prime, an AI assistant. The user's workspace is at: {workspace_path}"},
         {"role": "user", "content": args.message}
     ]
     
+    req_data = {
+        "model": model,
+        "messages": messages,
+        "stream": False
+    }
+    
+    req = urllib.request.Request(
+        "http://localhost:11434/api/chat",
+        data=json.dumps(req_data).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    
+    log(f"Prime -> {model}")
+    print()
+    
     try:
-        response = chat_with_tools(messages)
-        print(response)
-        print()
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode())
+            response = data.get("message", {}).get("content", "")
+            
+            # Check if user is asking for file operations and auto-execute
+            msg_lower = args.message.lower()
+            if any(k in msg_lower for k in ["list file", "show file", "what files", "directory contents"]):
+                files = list_files()
+                response += f"\n\n[Prime accessed your workspace]\n{files}"
+            elif msg_lower.startswith("read ") or "read file" in msg_lower:
+                # Try to extract filename
+                import re
+                fname_match = re.search(r'[\s\"\']([\w\-.]+\.[\w]+)[\s\"\']?', args.message)
+                if fname_match:
+                    content = read_file(fname_match.group(1))
+                    response += f"\n\n[Prime read file]\n{content[:2000]}"
+            
+            print(response)
+            print()
     except Exception as e:
         error(f"Request failed: {e}")
 
