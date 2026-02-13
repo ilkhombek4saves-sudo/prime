@@ -194,20 +194,44 @@ class ToolExecutor:
 
 
 class AgentRunner:
-    def __init__(self, model="llama3.2", workspace="."):
+    def __init__(self, model="llama3.2", workspace=".", provider="ollama"):
         self.model = model
         self.workspace = workspace
+        self.provider = provider
         self.executor = ToolExecutor(workspace)
         self.max_turns = 10
+        
+        # Load API keys from env
+        self.openai_key = os.environ.get("OPENAI_API_KEY")
+        self.anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
 
     def chat(self, user_message):
+        # Auto-detect analyze project requests
+        if any(k in user_message.lower() for k in ["analyze project", "проанализируй проект", "изучи проект"]):
+            return self._analyze_project(user_message)
+        
+        system_msg = f"""You are Prime, an AI assistant with tool access. 
+Workspace: {self.workspace}
+
+CRITICAL RULES:
+1. When user asks about files or code, USE the 'read' tool to read them
+2. When user asks to search, USE 'web_search' or 'memory_search'  
+3. NEVER say you cannot access files - you HAVE tools for that
+4. After using tools, provide helpful analysis based on results"""
+
         messages = [
-            {"role": "system", "content": f"You are Prime, an AI assistant with tools. Use tools when needed. Workspace: {self.workspace}"},
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": user_message}
         ]
         
         for turn in range(self.max_turns):
-            resp = self._call_ollama(messages)
+            if self.provider == "openai" and self.openai_key:
+                resp = self._call_openai(messages)
+            elif self.provider == "anthropic" and self.anthropic_key:
+                resp = self._call_anthropic(messages)
+            else:
+                resp = self._call_ollama(messages)
+            
             if "error" in resp:
                 return f"Error: {resp['error']}"
             
@@ -233,16 +257,94 @@ class AgentRunner:
         
         return "Max turns reached."
 
+    def _analyze_project(self, query):
+        """Auto-analyze project structure"""
+        log("Analyzing project structure...")
+        
+        # Get project structure
+        structure = self.executor.exec(f"find {self.workspace} -type f -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.json' -o -name '*.md' -o -name '*.yaml' -o -name '*.yml' 2>/dev/null | head -50")
+        
+        # Read key files
+        readme = ""
+        if (Path(self.workspace) / "README.md").exists():
+            readme = self.executor.read("README.md", limit=50)
+        
+        pkg_json = ""
+        if (Path(self.workspace) / "package.json").exists():
+            pkg_json = self.executor.read("package.json")
+        
+        # Build context
+        context = f"""Project Analysis Context:
+
+STRUCTURE:
+{structure}
+
+README:
+{readme[:2000]}
+
+PACKAGE.JSON:
+{pkg_json[:1000] if pkg_json else "Not found"}
+
+User query: {query}"""
+
+        messages = [
+            {"role": "system", "content": "You are a code analysis expert. Analyze the provided project information and answer the user's question."},
+            {"role": "user", "content": context}
+        ]
+        
+        if self.provider == "openai" and self.openai_key:
+            return self._call_openai(messages).get("message", {}).get("content", "Error")
+        else:
+            return self._call_ollama(messages).get("message", {}).get("content", "Error")
+
     def _call_ollama(self, messages):
         try:
             req = urllib.request.Request(
                 "http://localhost:11434/api/chat",
-                data=json.dumps({"model": self.model, "messages": messages, "tools": TOOLS, "stream": False}).encode(),
+                data=json.dumps({"model": self.model, "messages": messages, "tools": TOOLS, "stream": False, "options": {"temperature": 0.7}}).encode(),
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
             with urllib.request.urlopen(req, timeout=120) as r:
                 return {"message": json.loads(r.read().decode())}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _call_openai(self, messages):
+        try:
+            import httpx
+            resp = httpx.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self.openai_key}", "Content-Type": "application/json"},
+                json={"model": self.model, "messages": messages, "tools": TOOLS, "tool_choice": "auto", "temperature": 0.7},
+                timeout=60
+            )
+            data = resp.json()
+            msg = data["choices"][0]["message"]
+            return {"message": msg}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _call_anthropic(self, messages):
+        try:
+            import httpx
+            # Convert to Anthropic format
+            system_msg = ""
+            user_msgs = []
+            for m in messages:
+                if m["role"] == "system":
+                    system_msg = m["content"]
+                else:
+                    user_msgs.append(m)
+            
+            resp = httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": self.anthropic_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                json={"model": self.model, "max_tokens": 4096, "system": system_msg, "messages": user_msgs},
+                timeout=60
+            )
+            data = resp.json()
+            return {"message": {"content": data["content"][0]["text"], "role": "assistant"}}
         except Exception as e:
             return {"error": str(e)}
 
@@ -260,15 +362,18 @@ def cmd_agent(args):
         error("No message. Use: prime agent 'hello'")
         return
     
-    if not check_ollama():
+    # Determine provider
+    provider = args.provider or "ollama"
+    model = args.model or "llama3.2"
+    
+    if provider == "ollama" and not check_ollama():
         error("Ollama not running. Start: ollama serve")
         return
     
-    model = args.model or "llama3.2"
     workspace = os.environ.get("PRIME_WORKSPACE", os.getcwd())
     
-    runner = AgentRunner(model, workspace)
-    log(f"Prime -> {model}")
+    runner = AgentRunner(model, workspace, provider)
+    log(f"Prime -> {provider}/{model}")
     print()
     
     try:
@@ -312,7 +417,8 @@ def main():
     
     agent = sub.add_parser("agent", help="Chat with agent")
     agent.add_argument("message", help="Message to send")
-    agent.add_argument("--model", help="Model to use")
+    agent.add_argument("--model", help="Model to use (e.g., llama3.2, gpt-4, claude-3-sonnet)")
+    agent.add_argument("--provider", choices=["ollama", "openai", "anthropic"], help="Provider to use")
     
     sub.add_parser("status", help="Check status")
     
