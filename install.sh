@@ -78,25 +78,43 @@ setup_env() {
     # Собираем API ключи
     echo
     echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-    echo -e "${BOLD}       НАСТРОЙКА API КЛЮЧЕЙ (опционально)${RST}"
+    echo -e "${BOLD}       AI ПРОВАЙДЕРЫ (опционально)${RST}"
     echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
     echo "Нажми Enter чтобы пропустить, или введи ключ"
     echo
     
-    # OpenAI
-    read -p "OpenAI API Key [sk-...]: " OPENAI_KEY
-    echo
+    # OpenAI / ChatGPT
+    read -p "1. OpenAI API Key [sk-...]: " OPENAI_KEY
     
-    # Anthropic
-    read -p "Anthropic API Key [sk-ant-...]: " ANTHROPIC_KEY
+    # Google Gemini  
+    read -p "2. Google Gemini API Key [AI...]: " GEMINI_KEY
+    
+    # Mistral
+    read -p "3. Mistral API Key [...]: " MISTRAL_KEY
+    
+    # DeepSeek
+    read -p "4. DeepSeek API Key [...]: " DEEPSEEK_KEY
+    
+    # Qwen (Alibaba)
+    read -p "5. Qwen API Key [...]: " QWEN_KEY
+    
+    # Kimi (Moonshot)
+    read -p "6. Kimi API Key [...]: " KIMI_KEY
+    
+    # ZAI
+    read -p "7. ZAI API Key [...]: " ZAI_KEY
+    
     echo
+    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    echo -e "${BOLD}       КАНАЛЫ СВЯЗИ (опционально)${RST}"
+    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
     
     # Telegram
-    read -p "Telegram Bot Token [...]: " TELEGRAM_TOKEN
-    echo
+    read -p "8. Telegram Bot Token [...]: " TELEGRAM_TOKEN
     
     # Discord
-    read -p "Discord Bot Token [...]: " DISCORD_TOKEN
+    read -p "9. Discord Bot Token [...]: " DISCORD_TOKEN
+    
     echo
     
     # Дополнительные настройки
@@ -126,7 +144,12 @@ TOKEN_LIMIT=$TOKEN_LIMIT
 
 # AI Provider API Keys
 $(if [[ -n "$OPENAI_KEY" ]]; then echo "OPENAI_API_KEY=$OPENAI_KEY"; else echo "# OPENAI_API_KEY=sk-..."; fi)
-$(if [[ -n "$ANTHROPIC_KEY" ]]; then echo "ANTHROPIC_API_KEY=$ANTHROPIC_KEY"; else echo "# ANTHROPIC_API_KEY=sk-ant-..."; fi)
+$(if [[ -n "$GEMINI_KEY" ]]; then echo "GEMINI_API_KEY=$GEMINI_KEY"; else echo "# GEMINI_API_KEY=AI..."; fi)
+$(if [[ -n "$MISTRAL_KEY" ]]; then echo "MISTRAL_API_KEY=$MISTRAL_KEY"; else echo "# MISTRAL_API_KEY=..."; fi)
+$(if [[ -n "$DEEPSEEK_KEY" ]]; then echo "DEEPSEEK_API_KEY=$DEEPSEEK_KEY"; else echo "# DEEPSEEK_API_KEY=..."; fi)
+$(if [[ -n "$QWEN_KEY" ]]; then echo "QWEN_API_KEY=$QWEN_KEY"; else echo "# QWEN_API_KEY=..."; fi)
+$(if [[ -n "$KIMI_KEY" ]]; then echo "KIMI_API_KEY=$KIMI_KEY"; else echo "# KIMI_API_KEY=..."; fi)
+$(if [[ -n "$ZAI_KEY" ]]; then echo "ZAI_API_KEY=$ZAI_KEY"; else echo "# ZAI_API_KEY=..."; fi)
 
 # Messaging Channels
 $(if [[ -n "$TELEGRAM_TOKEN" ]]; then echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_TOKEN"; else echo "# TELEGRAM_BOT_TOKEN=..."; fi)
@@ -138,12 +161,20 @@ EOF
     
     # Показываем что настроено
     echo
-    echo -e "${GRN}Настроено провайдеров:${RST}"
-    [[ -n "$OPENAI_KEY" ]] && echo "  ✓ OpenAI"
-    [[ -n "$ANTHROPIC_KEY" ]] && echo "  ✓ Anthropic"
+    echo -e "${GRN}Настроено AI провайдеров:${RST}"
+    [[ -n "$OPENAI_KEY" ]] && echo "  ✓ OpenAI (GPT-4, GPT-3.5)"
+    [[ -n "$GEMINI_KEY" ]] && echo "  ✓ Google Gemini"
+    [[ -n "$MISTRAL_KEY" ]] && echo "  ✓ Mistral"
+    [[ -n "$DEEPSEEK_KEY" ]] && echo "  ✓ DeepSeek"
+    [[ -n "$QWEN_KEY" ]] && echo "  ✓ Qwen (Alibaba)"
+    [[ -n "$KIMI_KEY" ]] && echo "  ✓ Kimi (Moonshot)"
+    [[ -n "$ZAI_KEY" ]] && echo "  ✓ ZAI"
+    [[ -z "$OPENAI_KEY$GEMINI_KEY$MISTRAL_KEY$DEEPSEEK_KEY$QWEN_KEY$KIMI_KEY$ZAI_KEY" ]] && echo "  (нет AI провайдеров, можно добавить позже в .env)"
+    
+    echo -e "${GRN}Настроено каналов:${RST}"
     [[ -n "$TELEGRAM_TOKEN" ]] && echo "  ✓ Telegram"
     [[ -n "$DISCORD_TOKEN" ]] && echo "  ✓ Discord"
-    [[ -z "$OPENAI_KEY$ANTHROPIC_KEY$TELEGRAM_TOKEN$DISCORD_TOKEN" ]] && echo "  (нет, можно добавить позже в .env)"
+    [[ -z "$TELEGRAM_TOKEN$DISCORD_TOKEN" ]] && echo "  (нет каналов, можно добавить позже)"
     echo
 }
 
