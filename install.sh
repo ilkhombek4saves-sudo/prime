@@ -146,20 +146,24 @@ EOF
 
 start_prime() {
     log "Запуск Prime..."
-    docker compose up -d --wait 2>&1 | tail -5
     
-    # Ждём готовности
-    log "Ожидание запуска..."
-    for i in {1..30}; do
+    # Запускаем без --wait чтобы не ждать healthcheck
+    docker compose up -d 2>&1 | tail -3
+    
+    # Ждём готовности (макс 60 секунд)
+    log "Ожидание запуска (до 60 сек)..."
+    for i in {1..60}; do
         if curl -sf http://localhost:8000/api/healthz &>/dev/null; then
             ok "Prime запущен!"
             return
         fi
+        echo -n "."
         sleep 1
     done
     
-    warn "Prime запускается, но health check не прошёл"
-    docker compose logs --tail 20
+    echo
+    warn "Prime запускается долго, проверь логи:"
+    echo "  prime logs"
 }
 
 print_success() {
