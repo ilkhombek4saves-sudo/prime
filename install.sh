@@ -147,7 +147,21 @@ EOF
 start_prime() {
     log "Запуск Prime..."
     
-    # Запускаем без --wait чтобы не ждать healthcheck
+    # Останавливаем существующие контейнеры Prime
+    if docker compose ps 2>/dev/null | grep -q prime; then
+        warn "Найдены запущенные контейнеры Prime, останавливаем..."
+        docker compose down 2>&1 | tail -1
+    fi
+    
+    # Проверяем занятость порта 5432
+    if ss -tlnp 2>/dev/null | grep -q ':5432 '; then
+        warn "Порт 5432 занят, пробуем освободить..."
+        docker stop $(docker ps -q --filter publish=5432 2>/dev/null) 2>/dev/null || true
+        docker rm $(docker ps -aq --filter publish=5432 2>/dev/null) 2>/dev/null || true
+        sleep 2
+    fi
+    
+    # Запускаем
     docker compose up -d 2>&1 | tail -3
     
     # Ждём готовности (макс 60 секунд)
