@@ -75,6 +75,42 @@ setup_env() {
     JWT=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
     DBPASS=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
     
+    # Собираем API ключи
+    echo
+    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    echo -e "${BOLD}       НАСТРОЙКА API КЛЮЧЕЙ (опционально)${RST}"
+    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    echo "Нажми Enter чтобы пропустить, или введи ключ"
+    echo
+    
+    # OpenAI
+    read -p "OpenAI API Key [sk-...]: " OPENAI_KEY
+    echo
+    
+    # Anthropic
+    read -p "Anthropic API Key [sk-ant-...]: " ANTHROPIC_KEY
+    echo
+    
+    # Telegram
+    read -p "Telegram Bot Token [...]: " TELEGRAM_TOKEN
+    echo
+    
+    # Discord
+    read -p "Discord Bot Token [...]: " DISCORD_TOKEN
+    echo
+    
+    # Дополнительные настройки
+    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    echo -e "${BOLD}       ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ${RST}"
+    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    
+    read -p "Лимит токенов на запрос [4000]: " TOKEN_LIMIT
+    TOKEN_LIMIT=${TOKEN_LIMIT:-4000}
+    
+    read -p "Уровень логирования [info]: " LOG_LEVEL_INPUT
+    LOG_LEVEL_INPUT=${LOG_LEVEL_INPUT:-info}
+    
+    # Формируем .env
     cat > .env << EOF
 # Prime Configuration
 SECRET_KEY=$SECRET
@@ -84,17 +120,31 @@ DB_PASSWORD=$DBPASS
 DOMAIN=localhost
 EMAIL=admin@localhost
 WORKERS=4
-LOG_LEVEL=info
+LOG_LEVEL=$LOG_LEVEL_INPUT
 METRICS_ENABLED=true
+TOKEN_LIMIT=$TOKEN_LIMIT
 
-# Optional API Keys (раскомментируй и заполни)
-# OPENAI_API_KEY=sk-...
-# ANTHROPIC_AUTH_TOKEN=sk-ant-...
-# TELEGRAM_BOT_TOKEN=...
+# AI Provider API Keys
+$(if [[ -n "$OPENAI_KEY" ]]; then echo "OPENAI_API_KEY=$OPENAI_KEY"; else echo "# OPENAI_API_KEY=sk-..."; fi)
+$(if [[ -n "$ANTHROPIC_KEY" ]]; then echo "ANTHROPIC_API_KEY=$ANTHROPIC_KEY"; else echo "# ANTHROPIC_API_KEY=sk-ant-..."; fi)
+
+# Messaging Channels
+$(if [[ -n "$TELEGRAM_TOKEN" ]]; then echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_TOKEN"; else echo "# TELEGRAM_BOT_TOKEN=..."; fi)
+$(if [[ -n "$DISCORD_TOKEN" ]]; then echo "DISCORD_BOT_TOKEN=$DISCORD_TOKEN"; else echo "# DISCORD_BOT_TOKEN=..."; fi)
 EOF
     
     chmod 600 .env
     ok "Создан .env с секретами"
+    
+    # Показываем что настроено
+    echo
+    echo -e "${GRN}Настроено провайдеров:${RST}"
+    [[ -n "$OPENAI_KEY" ]] && echo "  ✓ OpenAI"
+    [[ -n "$ANTHROPIC_KEY" ]] && echo "  ✓ Anthropic"
+    [[ -n "$TELEGRAM_TOKEN" ]] && echo "  ✓ Telegram"
+    [[ -n "$DISCORD_TOKEN" ]] && echo "  ✓ Discord"
+    [[ -z "$OPENAI_KEY$ANTHROPIC_KEY$TELEGRAM_TOKEN$DISCORD_TOKEN" ]] && echo "  (нет, можно добавить позже в .env)"
+    echo
 }
 
 create_cli() {
@@ -183,7 +233,7 @@ start_prime() {
 }
 
 run_onboard() {
-    log "Проверка onboard..."
+    log "Настройка администратора..."
     
     # Ждём пока API будет доступен
     for i in {1..30}; do
@@ -197,38 +247,53 @@ run_onboard() {
     local status=$(curl -sf http://localhost:8000/api/onboard/status 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('onboard_required','false'))" 2>/dev/null || echo "false")
     
     if [[ "$status" == "True" || "$status" == "true" ]]; then
-        log "Создаём первого администратора..."
-        local result=$(curl -sf -X POST http://localhost:8000/api/onboard 2>/dev/null)
+        echo
+        echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+        echo -e "${BOLD}       СОЗДАНИЕ АДМИНИСТРАТОРА${RST}"
+        echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+        echo
+        
+        # Спрашиваем логин/пароль
+        read -p "Username [admin]: " ADMIN_USER
+        ADMIN_USER=${ADMIN_USER:-admin}
+        
+        # Генерируем случайный пароль
+        AUTO_PASSWORD=$(openssl rand -base64 16 | tr -d '=+/' | cut -c1-16)
+        read -p "Password [авто: $AUTO_PASSWORD]: " ADMIN_PASS
+        ADMIN_PASS=${ADMIN_PASS:-$AUTO_PASSWORD}
+        
+        log "Создаём администратора $ADMIN_USER..."
+        
+        local result=$(curl -sf -X POST http://localhost:8000/api/onboard \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" 2>/dev/null)
         
         if [[ -n "$result" ]]; then
-            local username=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('username','admin'))" 2>/dev/null || echo "admin")
-            local password=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('password',''))" 2>/dev/null || echo "")
+            ok "Администратор создан!"
             
-            if [[ -n "$password" ]]; then
-                ok "Администратор создан!"
-                
-                # Сохраняем credentials в файл
-                cat > "$(pwd)/.admin_credentials" << EOF
+            # Сохраняем credentials в файл
+            cat > "$(pwd)/.admin_credentials" << EOF
 # Prime Admin Credentials
 # Смени пароль сразу после первого входа!
 
-Username: $username
-Password: $password
+Username: $ADMIN_USER
+Password: $ADMIN_PASS
 EOF
-                chmod 600 "$(pwd)/.admin_credentials"
-                
-                echo
-                echo -e "${YLW}╔════════════════════════════════════════════╗${RST}"
-                echo -e "${YLW}║${RST}         ${BOLD}ADMIN CREDENTIALS${RST}                ${YLW}║${RST}"
-                echo -e "${YLW}╚════════════════════════════════════════════╝${RST}"
-                echo
-                echo "  Username: ${BOLD}$username${RST}"
-                echo "  Password: ${BOLD}$password${RST}"
-                echo
-                echo -e "${RED}⚠ СМЕНИ ПАРОЛЬ СРАЗУ ПОСЛЕ ПЕРВОГО ВХОДА!${RST}"
-                echo
-                echo "Сохранено в: $(pwd)/.admin_credentials"
-            fi
+            chmod 600 "$(pwd)/.admin_credentials"
+            
+            echo
+            echo -e "${YLW}╔════════════════════════════════════════════╗${RST}"
+            echo -e "${YLW}║${RST}         ${BOLD}ADMIN CREDENTIALS${RST}                ${YLW}║${RST}"
+            echo -e "${YLW}╚════════════════════════════════════════════╝${RST}"
+            echo
+            echo "  Username: ${BOLD}$ADMIN_USER${RST}"
+            echo "  Password: ${BOLD}$ADMIN_PASS${RST}"
+            echo
+            echo -e "${RED}⚠ СМЕНИ ПАРОЛЬ СРАЗУ ПОСЛЕ ПЕРВОГО ВХОДА!${RST}"
+            echo
+            echo "Сохранено в: $(pwd)/.admin_credentials"
+        else
+            error "Не удалось создать администратора"
         fi
     else
         ok "Onboard уже выполнен"

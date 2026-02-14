@@ -1,5 +1,6 @@
 """Onboard - create first admin user when no users exist."""
 from fastapi import APIRouter, HTTPException, Depends, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -10,8 +11,20 @@ from app.auth.security import hash_password
 router = APIRouter(prefix="/onboard", tags=["onboard"])
 
 
-@router.post("")
-def onboard(db: Session = Depends(get_db)):
+class OnboardRequest(BaseModel):
+    username: str = Field(default="admin", min_length=3, max_length=50)
+    password: str = Field(default="changeme123", min_length=6, max_length=100)
+
+
+class OnboardResponse(BaseModel):
+    message: str
+    username: str
+    password: str
+    warning: str
+
+
+@router.post("", response_model=OnboardResponse)
+def onboard(payload: OnboardRequest, db: Session = Depends(get_db)):
     """Create first admin user if no users exist."""
     # Check if any users exist
     user_count = db.query(func.count(User.id)).scalar()
@@ -21,23 +34,22 @@ def onboard(db: Session = Depends(get_db)):
             detail="Onboard already completed. Users exist."
         )
     
-    # Create first admin user with default credentials
-    # Password should be changed immediately after first login
+    # Create first admin user
     admin = User(
-        username="admin",
+        username=payload.username,
         role=UserRole.admin,
-        password_hash=hash_password("changeme123"),
+        password_hash=hash_password(payload.password),
     )
     db.add(admin)
     db.commit()
     db.refresh(admin)
     
-    return {
-        "message": "First admin user created",
-        "username": "admin",
-        "password": "changeme123",
-        "warning": "Change password immediately after first login!"
-    }
+    return OnboardResponse(
+        message="First admin user created",
+        username=payload.username,
+        password=payload.password,
+        warning="Change password immediately after first login!"
+    )
 
 
 @router.get("/status")
