@@ -16,8 +16,9 @@ def healthz() -> dict:
         with engine.connect() as conn:
             conn.execute(__import__("sqlalchemy").text("SELECT 1"))
         db_ok = True
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("DB health check failed: %s", exc)
     return {
         "status": "ok" if db_ok else "degraded",
         "db": db_ok,

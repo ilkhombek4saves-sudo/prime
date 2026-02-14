@@ -1105,7 +1105,8 @@ def _cron_add(name: str, schedule: str, message: str) -> str:
         if cron_file.exists():
             try:
                 jobs = json.loads(cron_file.read_text())
-            except:
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Failed to read cron jobs file: %s", exc)
                 jobs = []
         
         job = {

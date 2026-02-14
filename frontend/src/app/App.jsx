@@ -19,6 +19,7 @@ import OrganizationsPage from "../pages/OrganizationsPage";
 import AgentsPage from "../pages/AgentsPage";
 import BindingsPage from "../pages/BindingsPage";
 import GlobalSearch from "../components/GlobalSearch";
+import ErrorBoundary from "../components/ErrorBoundary";
 import { useColorMode } from "../styles/theme";
 import { WsProvider, useWsStatus } from "../services/wsContext";
 import { destroyGatewayWS } from "../services/ws";
@@ -104,21 +105,23 @@ function AuthenticatedApp() {
       </Box>
 
       <Container sx={{ py: 3 }}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/bots" element={<BotsPage />} />
-          <Route path="/providers" element={<ProvidersPage />} />
-          <Route path="/plugins" element={<PluginsPage />} />
-          <Route path="/sessions" element={<SessionsPage />} />
-          <Route path="/tasks" element={<TasksPage />} />
-          <Route path="/users" element={<UsersPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/knowledge-bases" element={<KnowledgeBasePage />} />
-          <Route path="/organizations" element={<OrganizationsPage />} />
-          <Route path="/agents" element={<AgentsPage />} />
-          <Route path="/bindings" element={<BindingsPage />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/bots" element={<BotsPage />} />
+            <Route path="/providers" element={<ProvidersPage />} />
+            <Route path="/plugins" element={<PluginsPage />} />
+            <Route path="/sessions" element={<SessionsPage />} />
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/users" element={<UsersPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/knowledge-bases" element={<KnowledgeBasePage />} />
+            <Route path="/organizations" element={<OrganizationsPage />} />
+            <Route path="/agents" element={<AgentsPage />} />
+            <Route path="/bindings" element={<BindingsPage />} />
+          </Routes>
+        </ErrorBoundary>
       </Container>
     </>
   );

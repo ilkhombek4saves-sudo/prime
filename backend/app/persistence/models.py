@@ -262,6 +262,9 @@ class Session(Base):
     agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agents.id"))
     provider_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("providers.id"))
     status: Mapped[SessionStatus] = mapped_column(Enum(SessionStatus), default=SessionStatus.active)
+    # Summary of conversation (instead of full message history)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reasoning_content: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(

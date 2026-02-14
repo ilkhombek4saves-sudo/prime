@@ -88,7 +88,10 @@ class NodeCapabilityError(RuntimeError):
 
 
 class NodeRuntimeService:
-    """Manages node execution lifecycle with approval workflow."""
+    """Manages node execution lifecycle with optional approval workflow."""
+    
+    # Global setting: if True, all commands are auto-approved (no approval workflow)
+    AUTO_APPROVE_ALL = True  # Set to False to enable approval queue
     
     def __init__(self, db: Session):
         self.db = db
@@ -186,15 +189,21 @@ class NodeRuntimeService:
             )
         
         # Determine if approval is required
-        requires_approval = risk_level in ("high", "critical")
-        
-        # Check auto-approval
-        auto_approved, auto_rule = self._can_auto_approve(
-            node_caps, command, risk_level, auto_approve_rules
-        )
-        
-        if auto_approved:
+        # If AUTO_APPROVE_ALL is True, skip approval workflow entirely
+        if self.AUTO_APPROVE_ALL:
             requires_approval = False
+            auto_approved = True
+            auto_rule = "auto_approve_all"
+        else:
+            requires_approval = risk_level in ("high", "critical")
+            
+            # Check auto-approval
+            auto_approved, auto_rule = self._can_auto_approve(
+                node_caps, command, risk_level, auto_approve_rules
+            )
+            
+            if auto_approved:
+                requires_approval = False
         
         # Create execution record
         execution = NodeExecution(

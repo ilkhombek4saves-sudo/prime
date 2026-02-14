@@ -39,6 +39,7 @@ from app.services.binding_resolver import BindingResolver
 from app.services.dm_policy import DMPolicyService
 from app.services.event_bus import get_event_bus
 from app.services.memory_service import MemoryService
+from app.services.session_summary import SessionSummaryService
 from app.services.token_optimizer import TokenOptimizationService
 from app.services.web_search import WebSearchService
 from app.services.long_term_memory import LongTermMemoryService
@@ -49,11 +50,16 @@ from app.services.pairing_service import PairingLimitError, create_request
 logger = logging.getLogger(__name__)
 
 _memory_svc = MemoryService()
+_summary_svc = SessionSummaryService
 _search_svc = WebSearchService()
 _agent_runner = AgentRunner()
 _token_optimizer = TokenOptimizationService()
 _ltm_svc = LongTermMemoryService()
 _cost_tracker = CostTracker()
+
+# Feature flags for simplified mode
+USE_SUMMARY_INSTEAD_OF_HISTORY = True  # If True, use summary instead of full message history
+DISABLE_AUDIT_LOG = True  # If True, skip audit logging
 
 _FALLBACK_PROVIDER_ORDER = [
     "openai_default",
@@ -398,6 +404,12 @@ async def _cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         session = _get_active_session(db, bot_record.id, user.id, agent.id)
         if session:
             session.status = SessionStatus.finished
+            # Clear summary when resetting session
+            if USE_SUMMARY_INSTEAD_OF_HISTORY:
+                try:
+                    _summary_svc(db).clear_summary(session)
+                except Exception:
+                    pass
             db.commit()
     await msg.reply_text("Сессия сброшена. Начните новый диалог.")
 
@@ -794,10 +806,16 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         agent_code_exec = agent.code_execution_enabled
         agent_workspace = agent.workspace_path  # may be None
 
-        # Load conversation history while DB is still open
+        # Load conversation context (summary or full history)
         history: list[dict] = []
+        session_summary = ""
         if agent_memory and session_id:
-            history = _memory_svc.get_history(db, session_id, agent_max_history)
+            if USE_SUMMARY_INSTEAD_OF_HISTORY:
+                # Use lightweight summary instead of full message history
+                session_summary = _summary_svc(db).get_summary(session)
+            else:
+                # Use full message history (legacy mode)
+                history = _memory_svc.get_history(db, session_id, agent_max_history)
 
         # Long-term memory: recall cross-session facts about this user
         ltm_context = ""
@@ -836,6 +854,9 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
     system_parts = [f"Today's date and time: {date_str}"]
     if agent_system_prompt:
         system_parts.append(agent_system_prompt)
+    # Add conversation summary if using summary mode
+    if USE_SUMMARY_INSTEAD_OF_HISTORY and session_summary:
+        system_parts.append(f"Previous conversation summary:\n{session_summary}")
     if ltm_context:
         system_parts.append(ltm_context)
     if rag_context:
@@ -1111,18 +1132,26 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         and not reply_text.startswith("Ошибка у провайдера `")
     ):
         with SessionLocal() as db:
-            _memory_svc.save_exchange(
-                db,
-                session_id,
-                msg.text,
-                reply_text,
-                user_meta={"optimizer": optimization_plan.as_meta()},
-                assistant_meta=response_meta,
-                session_meta={
-                    "last_token_usage": response_meta.get("usage", {}),
-                    "last_optimizer": optimization_plan.as_meta(),
-                },
-            )
+            # Save full exchange if not using summary mode
+            if not USE_SUMMARY_INSTEAD_OF_HISTORY:
+                _memory_svc.save_exchange(
+                    db,
+                    session_id,
+                    msg.text,
+                    reply_text,
+                    user_meta={"optimizer": optimization_plan.as_meta()},
+                    assistant_meta=response_meta,
+                    session_meta={
+                        "last_token_usage": response_meta.get("usage", {}),
+                        "last_optimizer": optimization_plan.as_meta(),
+                    },
+                )
+            else:
+                # Update lightweight summary instead of full history
+                try:
+                    _summary_svc(db).update_summary(session, msg.text, reply_text)
+                except Exception as _sum_exc:
+                    logger.debug("Summary update failed: %s", _sum_exc)
             # Cost tracking
             usage_data = response_meta.get("usage", {})
             if usage_data:
