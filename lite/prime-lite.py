@@ -425,7 +425,6 @@ class ToolExecutor:
 def build_system_prompt():
     """Build a dynamic system prompt with environment awareness"""
     info = get_system_info()
-    models = get_ollama_models()
 
     apis = []
     for name, key_var in [
@@ -436,7 +435,6 @@ def build_system_prompt():
         if os.environ.get(key_var):
             apis.append(name)
 
-    model_list = ", ".join(models[:5]) if models else "none detected"
     api_list = ", ".join(apis) if apis else "none configured"
 
     return f"""You are Prime, an AI coding agent running on a REAL machine with FULL ACCESS to the local filesystem, shell, and network.
@@ -448,8 +446,7 @@ def build_system_prompt():
 - User: {info['user']}
 - Working directory: {info['workspace']}
 - Python: {info['python']}
-- Local Ollama models: {model_list}
-- Configured cloud APIs: {api_list}
+- Configured APIs: {api_list}
 - Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## CRITICAL: YOU MUST USE TOOLS
@@ -678,8 +675,7 @@ def call_gemini(messages, api_key, model="gemini-2.0-flash"):
 # ─── Provider Selection ─────────────────────────────────────────────────────
 def select_provider():
     """Select best available provider. Returns provider name or None."""
-    if ollama_available():
-        return "ollama"
+    # API providers only (no local LLMs)
     if os.environ.get("DEEPSEEK_API_KEY"):
         return "deepseek"
     if os.environ.get("KIMI_API_KEY"):
@@ -703,7 +699,8 @@ def select_provider():
 def pick_ollama_model():
     """Choose the best Ollama model available."""
     models = get_ollama_models()
-    for preferred in ["qwen2.5:14b", "qwen2.5:7b", "llama3.2"]:
+    # Prefer 7b for speed, fallback to 14b for quality
+    for preferred in ["qwen2.5:7b", "qwen2.5:14b", "llama3.2"]:
         if preferred in models:
             return preferred
     return models[0] if models else "llama3.2"
@@ -726,13 +723,11 @@ class AgentLoop:
         if not self.provider:
             self.provider = select_provider()
         if not self.provider:
-            error("No LLM provider available. Start Ollama or configure API keys.")
+            error("No LLM provider available. Set API keys in ~/.config/prime/.env")
             return False
 
         if not self.model:
-            if self.provider == "ollama":
-                self.model = pick_ollama_model()
-            elif self.provider == "deepseek":
+            if self.provider == "deepseek":
                 self.model = "deepseek-chat"
             elif self.provider == "kimi":
                 self.model = "moonshot-v1-8k"
@@ -770,13 +765,6 @@ class AgentLoop:
                 return call_claude_code(messages, self.model)
             return "No provider configured.", [], {}
         except Exception as e:
-            # Fallback to Ollama if primary fails
-            if self.provider != "ollama" and ollama_available():
-                warn(f"{self.provider} failed ({e}). Falling back to Ollama...")
-                try:
-                    return call_ollama(messages, pick_ollama_model())
-                except Exception as e2:
-                    return f"All providers failed. {self.provider}: {e} | Ollama: {e2}", [], {}
             return f"Error ({self.provider}): {e}", [], {}
 
     def _append_tool_results(self, messages, raw_msg, tool_calls, results):
@@ -796,7 +784,12 @@ class AgentLoop:
                 messages.append({"role": "tool", "content": result})
         else:
             # OpenAI-compatible (DeepSeek, Kimi, OpenAI)
-            messages.append(raw_msg)
+            # Add assistant message with tool_calls
+            assistant_msg = {"role": "assistant", "content": raw_msg.get("content", "")}
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            messages.append(assistant_msg)
+            # Add tool results
             for tc, result in zip(tool_calls, results):
                 tc_id = tc.get("id", f"call_{int(time.time() * 1000)}")
                 messages.append({"role": "tool", "tool_call_id": tc_id, "content": result})
@@ -949,16 +942,6 @@ def cmd_status():
     ok(f"Workspace: {info['workspace']}")
     ok(f"User: {info['user']}")
 
-    # Ollama
-    print()
-    if ollama_available():
-        models = get_ollama_models()
-        ok(f"Ollama: {len(models)} model(s)")
-        for m in models[:5]:
-            print(f"       - {m}")
-    else:
-        error("Ollama: not running")
-
     # APIs
     print(f"\n{BOLD}API Keys:{R}")
     for name, key_var in [
@@ -1090,13 +1073,12 @@ def cmd_help():
   prime "Find all TODO comments in Python files"
 
 {BOLD}Options:{R}
-  --model MODEL      Use specific model (e.g. qwen2.5:14b, deepseek-chat)
-  --provider NAME    Force provider (ollama, deepseek, kimi, gemini, claude-code)
+  --model MODEL      Use specific model (e.g. deepseek-chat, gemini-2.0-flash)
+  --provider NAME    Force provider (deepseek, kimi, gemini, claude-code)
   --telegram, -t     Send response to Telegram chat
 
 {BOLD}Providers:{R}
-  ollama            Local models (qwen2.5, llama3.2) - default
-  deepseek          DeepSeek API (fast, cheap)
+  deepseek          DeepSeek API (default, fast, cheap)
   kimi              Moonshot AI (Chinese/English)
   gemini            Google Gemini
   claude-code       Claude Code CLI (uses your OAuth token)
