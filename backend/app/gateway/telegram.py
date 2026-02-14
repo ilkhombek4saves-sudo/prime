@@ -626,13 +626,20 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _handle_message_inner(update, context)
     except Exception as exc:
         error_id = uuid.uuid4().hex[:8]
-        logger.error("handle_message error id=%s: %s\n%s", error_id, exc, traceback.format_exc())
+        # Детальное логирование с полным стектрейсом
+        logger.error(
+            "TELEGRAM_HANDLER_ERROR id=%s error_type=%s error=%s\nFull traceback:\n%s",
+            error_id,
+            type(exc).__name__,
+            str(exc),
+            traceback.format_exc()
+        )
         if update.message:
             settings = get_settings()
             show_debug = settings.telegram_show_errors or settings.app_env != "prod"
-            await update.message.reply_text(
-                _format_internal_error_message(exc, debug=show_debug, error_id=error_id)
-            )
+            error_msg = _format_internal_error_message(exc, debug=show_debug, error_id=error_id)
+            logger.error("Sending error message to user: %s", error_msg)
+            await update.message.reply_text(error_msg)
 
 
 async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -912,6 +919,23 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
             ),
         )
         reply_text = run_result.text
+        
+        # Логируем результат от провайдера
+        logger.info(
+            "Provider response agent=%s provider=%s model=%s text_length=%d",
+            agent_name,
+            provider_name,
+            run_result.model or selected_model,
+            len(reply_text) if reply_text else 0
+        )
+        
+        if not reply_text:
+            logger.warning(
+                "Empty text from provider agent=%s provider=%s model=%s",
+                agent_name,
+                provider_name,
+                run_result.model or selected_model
+            )
         input_tokens = run_result.input_tokens or optimization_plan.estimated_input_tokens
         output_tokens = (
             run_result.output_tokens or _token_optimizer.estimate_text_tokens(reply_text)
@@ -969,6 +993,13 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         if fallback_result is not None:
             run_result = fallback_result
             reply_text = run_result.text
+            logger.info(
+                "Fallback successful agent=%s from=%s to=%s text_length=%d",
+                agent_name,
+                primary_provider_name,
+                provider_name,
+                len(reply_text) if reply_text else 0
+            )
             response_meta["provider_name"] = provider_name
             response_meta["provider_type"] = str(getattr(provider_type, "value", provider_type))
             input_tokens = run_result.input_tokens or optimization_plan.estimated_input_tokens
@@ -1043,6 +1074,7 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
             stop_stream.set()
             await display_task
             if not use_streaming or not stream_buf.get_text():
+                logger.info("Sending error message to chat=%s error_id=%s", msg.chat.id, error_id)
                 await msg.reply_text(reply_text)
             return
     finally:
@@ -1051,7 +1083,26 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
 
     # For tool-calling mode the message wasn't sent yet; for streaming it was already edited
     if not use_streaming or not stream_buf.get_text():
+        # Проверяем что ответ не пустой
+        if not reply_text or not reply_text.strip():
+            error_id = uuid.uuid4().hex[:8]
+            logger.error(
+                "Empty reply from provider agent=%s provider=%s error_id=%s",
+                agent_name, provider_name, error_id
+            )
+            reply_text = (
+                f"⚠️ Пустой ответ от провайдера `{provider_name}`.\n\n"
+                f"Возможные причины:\n"
+                f"• API ключ неверный или истёк\n"
+                f"• Модель недоступна\n" 
+                f"• Превышен лимит запросов\n\n"
+                f"Проверьте настройки провайдера в админке.\n"
+                f"Error ID: `{error_id}`"
+            )
+        logger.info("Sending reply to chat=%s length=%d", msg.chat.id, len(reply_text))
         await msg.reply_text(reply_text)
+    else:
+        logger.info("Streaming used, message already edited for chat=%s", msg.chat.id)
 
     # ── Save exchange to memory + cost tracking + LTM extraction ────────────
     if (
