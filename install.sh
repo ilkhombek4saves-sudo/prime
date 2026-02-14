@@ -332,10 +332,14 @@ print_success() {
     echo -e "${RED}⚠ Смени пароль после первого входа!${RST}"
     echo
     echo -e "${BLU}Команды:${RST}"
-    echo "  prime status     # Статус"
-    echo "  prime down       # Остановить"
-    echo "  prime logs       # Логи"
-    echo "  prime uninstall  # Удалить"
+    echo "  prime setup         # Запустить wizard настройки"
+    echo "  prime doctor        # Проверка здоровья системы"
+    echo "  prime status        # Статус Prime"
+    echo "  prime logs          # Просмотр логов"
+    echo "  prime agents list   # Список агентов"
+    echo "  prime channels list # Список каналов"
+    echo "  prime up/down       # Запуск/остановка"
+    echo "  prime uninstall     # Удалить Prime"
     echo
 }
 
@@ -345,35 +349,24 @@ create_cli() {
     
     local PRIME_DIR="$(pwd)"
     
+    # Install Python CLI
+    log "Установка Prime CLI..."
+    
+    # Create wrapper script that calls Python CLI
     cat > "$BIN_DIR/prime" << EOF
 #!/bin/bash
 export PRIME_HOME="$PRIME_DIR"
-cd "$PRIME_DIR"
-
-case "\${1:-}" in
-    status)
-        curl -sf http://localhost:8000/api/healthz 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "Prime is offline"
-        ;;
-    up|start)
-        docker compose up -d
-        echo "✓ Prime started"
-        ;;
-    down|stop)
-        docker compose down
-        echo "✓ Prime stopped"
-        ;;
-    logs)
-        docker compose logs -f
-        ;;
-    uninstall)
-        "$PRIME_DIR/uninstall.sh"
-        ;;
-    *)
-        docker compose "\$@"
-        ;;
-esac
+export PYTHONPATH="$PRIME_DIR/cli:$PYTHONPATH"
+python3 "$PRIME_DIR/cli/prime.py" "\$@"
 EOF
     chmod +x "$BIN_DIR/prime"
+    
+    # Create symlink for 'prime' command
+    if [[ -f "$PRIME_DIR/cli/prime.py" ]]; then
+        ok "CLI установлен: $BIN_DIR/prime"
+    else
+        warn "CLI файл не найден, используем базовый скрипт"
+    fi
     
     # Добавляем в PATH
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
