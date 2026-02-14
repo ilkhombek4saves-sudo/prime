@@ -170,7 +170,7 @@ start_prime() {
     for i in {1..60}; do
         if curl -sf http://localhost:8000/api/healthz &>/dev/null; then
             ok "Prime запущен!"
-            return
+            return 0
         fi
         echo -n "."
         sleep 1
@@ -179,6 +179,60 @@ start_prime() {
     echo
     warn "Prime запускается долго, проверь логи:"
     echo "  prime logs"
+    return 1
+}
+
+run_onboard() {
+    log "Проверка onboard..."
+    
+    # Ждём пока API будет доступен
+    for i in {1..30}; do
+        if curl -sf http://localhost:8000/api/onboard/status &>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    
+    # Проверяем нужен ли onboard
+    local status=$(curl -sf http://localhost:8000/api/onboard/status 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('onboard_required','false'))" 2>/dev/null || echo "false")
+    
+    if [[ "$status" == "True" || "$status" == "true" ]]; then
+        log "Создаём первого администратора..."
+        local result=$(curl -sf -X POST http://localhost:8000/api/onboard 2>/dev/null)
+        
+        if [[ -n "$result" ]]; then
+            local username=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('username','admin'))" 2>/dev/null || echo "admin")
+            local password=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('password',''))" 2>/dev/null || echo "")
+            
+            if [[ -n "$password" ]]; then
+                ok "Администратор создан!"
+                
+                # Сохраняем credentials в файл
+                cat > "$(pwd)/.admin_credentials" << EOF
+# Prime Admin Credentials
+# Смени пароль сразу после первого входа!
+
+Username: $username
+Password: $password
+EOF
+                chmod 600 "$(pwd)/.admin_credentials"
+                
+                echo
+                echo -e "${YLW}╔════════════════════════════════════════════╗${RST}"
+                echo -e "${YLW}║${RST}         ${BOLD}ADMIN CREDENTIALS${RST}                ${YLW}║${RST}"
+                echo -e "${YLW}╚════════════════════════════════════════════╝${RST}"
+                echo
+                echo "  Username: ${BOLD}$username${RST}"
+                echo "  Password: ${BOLD}$password${RST}"
+                echo
+                echo -e "${RED}⚠ СМЕНИ ПАРОЛЬ СРАЗУ ПОСЛЕ ПЕРВОГО ВХОДА!${RST}"
+                echo
+                echo "Сохранено в: $(pwd)/.admin_credentials"
+            fi
+        fi
+    else
+        ok "Onboard уже выполнен"
+    fi
 }
 
 print_success() {
@@ -207,7 +261,9 @@ main() {
     check_docker
     setup_env
     create_cli
-    start_prime
+    if start_prime; then
+        run_onboard
+    fi
     print_success
 }
 

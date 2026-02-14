@@ -8,6 +8,7 @@ from app.api import (
     health,
     knowledge_bases,
     node_executions,
+    onboard,
     organizations,
     pairing,
     plugins,
@@ -55,3 +56,4 @@ api_router.include_router(tailscale_router)
 api_router.include_router(doctor_router)
 api_router.include_router(security_router)
 api_router.include_router(node_executions.router)
+api_router.include_router(onboard.router)
