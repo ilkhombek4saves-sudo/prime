@@ -209,6 +209,14 @@ case "\${1:-}" in
     doctor)
         curl -s http://localhost:8000/api/doctor | python3 -m json.tool 2>/dev/null || echo "Prime is offline"
         ;;
+    uninstall)
+        if [[ -f "$PRIME_DIR/uninstall.sh" ]]; then
+            "$PRIME_DIR/uninstall.sh"
+        else
+            echo "uninstall.sh not found. Downloading..."
+            curl -fsSL https://raw.githubusercontent.com/ilkhombek4saves-sudo/prime/main/uninstall.sh | bash
+        fi
+        ;;
     *)
         docker compose "\$@"
         ;;
@@ -343,6 +351,7 @@ print_success() {
     echo "  prime down       # Остановить"
     echo "  prime logs       # Логи"
     echo "  prime doctor     # Диагностика"
+    echo "  prime uninstall  # Полное удаление Prime"
     echo
     echo "API: http://localhost:8000/api"
     echo "Docs: http://localhost:8000/docs"
