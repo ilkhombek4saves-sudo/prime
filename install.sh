@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Prime Installer
-# Usage: git clone ... && cd prime && ./install.sh
+# Prime Local Installer
+# Запускает Prime из текущей директории (без скачивания)
+# Usage: ./install.sh
 
 set -euo pipefail
 
@@ -19,27 +20,37 @@ error() { echo -e "${RED}✗${RST} $1" >&2; }
 banner() {
     echo
     echo -e "${BOLD}${BLU}╔════════════════════════════════════════════╗${RST}"
-    echo -e "${BOLD}${BLU}║${RST}        ${BOLD}PRIME AI AGENT PLATFORM${RST}          ${BLU}║${RST}"
+    echo -e "${BOLD}${BLU}║${RST}        ${BOLD}PRIME LOCAL INSTALLER${RST}            ${BLU}║${RST}"
     echo -e "${BOLD}${BLU}╚════════════════════════════════════════════╝${RST}"
     echo
 }
 
+# Проверяем что мы в директории проекта
+check_project() {
+    if [[ ! -f "docker-compose.yml" ]]; then
+        error "Не найден docker-compose.yml"
+        echo "Запусти install.sh из директории проекта Prime"
+        exit 1
+    fi
+    ok "Проект найден: $(pwd)"
+}
+
 check_docker() {
-    log "Checking Docker..."
+    log "Проверка Docker..."
     
     if ! command -v docker &>/dev/null; then
-        error "Docker not found"
-        echo "Install: curl -fsSL https://get.docker.com | sh"
+        error "Docker не установлен"
+        echo "Установи: curl -fsSL https://get.docker.com | sh"
         exit 1
     fi
     
     if ! docker info &>/dev/null; then
-        error "Docker daemon not running"
+        error "Docker daemon не запущен"
         exit 1
     fi
     
     if ! docker compose version &>/dev/null; then
-        error "Docker Compose v2 not found"
+        error "Docker Compose v2 не найден"
         exit 1
     fi
     
@@ -47,14 +58,24 @@ check_docker() {
 }
 
 setup_env() {
-    if [[ ! -f .env ]]; then
-        log "Creating .env..."
-        
-        SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
-        JWT=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
-        DBPASS=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
-        
-        cat > .env << EOF
+    if [[ -f ".env" ]]; then
+        warn ".env уже существует"
+        read -p "Пересоздать? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            ok "Используем существующий .env"
+            return
+        fi
+    fi
+    
+    log "Создание конфигурации..."
+    
+    # Генерируем секреты
+    SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+    JWT=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+    DBPASS=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
+    
+    cat > .env << EOF
 # Prime Configuration
 SECRET_KEY=$SECRET
 JWT_SECRET=$JWT
@@ -63,12 +84,17 @@ DB_PASSWORD=$DBPASS
 DOMAIN=localhost
 EMAIL=admin@localhost
 WORKERS=4
+LOG_LEVEL=info
+METRICS_ENABLED=true
+
+# Optional API Keys (раскомментируй и заполни)
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_AUTH_TOKEN=sk-ant-...
+# TELEGRAM_BOT_TOKEN=...
 EOF
-        chmod 600 .env
-        ok "Created .env"
-    else
-        ok ".env already exists"
-    fi
+    
+    chmod 600 .env
+    ok "Создан .env с секретами"
 }
 
 create_cli() {
@@ -79,6 +105,7 @@ create_cli() {
     
     cat > "$BIN_DIR/prime" << EOF
 #!/bin/bash
+# Prime CLI
 export PRIME_HOME="$PRIME_DIR"
 cd "$PRIME_DIR"
 
@@ -98,46 +125,66 @@ case "\${1:-}" in
     logs)
         docker compose logs -f
         ;;
+    doctor)
+        curl -s http://localhost:8000/api/doctor | python3 -m json.tool 2>/dev/null || echo "Prime is offline"
+        ;;
     *)
         docker compose "\$@"
         ;;
 esac
 EOF
     chmod +x "$BIN_DIR/prime"
-    ok "CLI installed to $BIN_DIR/prime"
+    ok "CLI установлен: $BIN_DIR/prime"
     
+    # Добавляем в PATH если нужно
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         echo "export PATH=\"$BIN_DIR:\$PATH\"" >> ~/.bashrc
         export PATH="$BIN_DIR:$PATH"
-        ok "Added to PATH"
+        ok "Добавлено в PATH"
     fi
 }
 
 start_prime() {
-    log "Starting Prime..."
-    docker compose up -d --wait 2>&1 | tail -3
-    ok "Prime is running!"
+    log "Запуск Prime..."
+    docker compose up -d --wait 2>&1 | tail -5
+    
+    # Ждём готовности
+    log "Ожидание запуска..."
+    for i in {1..30}; do
+        if curl -sf http://localhost:8000/api/healthz &>/dev/null; then
+            ok "Prime запущен!"
+            return
+        fi
+        sleep 1
+    done
+    
+    warn "Prime запускается, но health check не прошёл"
+    docker compose logs --tail 20
 }
 
 print_success() {
     echo
     echo -e "${BOLD}${GRN}╔════════════════════════════════════════════╗${RST}"
-    echo -e "${BOLD}${GRN}║${RST}         ${GRN}✓ PRIME INSTALLED${RST}                ${GRN}║${RST}"
+    echo -e "${BOLD}${GRN}║${RST}         ${GRN}✓ PRIME ГОТОВ${RST}                    ${GRN}║${RST}"
     echo -e "${BOLD}${GRN}╚════════════════════════════════════════════╝${RST}"
     echo
-    echo "Commands:"
-    echo "  prime status     # Check health"
-    echo "  prime up         # Start services"  
-    echo "  prime down       # Stop services"
-    echo "  prime logs       # View logs"
+    echo "Команды:"
+    echo "  prime status     # Проверить статус"
+    echo "  prime up         # Запустить"
+    echo "  prime down       # Остановить"
+    echo "  prime logs       # Логи"
+    echo "  prime doctor     # Диагностика"
     echo
     echo "API: http://localhost:8000/api"
     echo "Docs: http://localhost:8000/docs"
+    echo
+    echo "Настройка: $(pwd)/.env"
     echo
 }
 
 main() {
     banner
+    check_project
     check_docker
     setup_env
     create_cli
