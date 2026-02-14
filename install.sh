@@ -1,86 +1,148 @@
 #!/usr/bin/env bash
+# Prime Installer
+# Usage: git clone ... && cd prime && ./install.sh
+
 set -euo pipefail
 
-BASE_URL="${PRIME_INSTALL_BASE_URL:-https://wgrbojeweoginrb234.duckdns.org}"
-BIN_URL="${PRIME_BIN_URL:-${BASE_URL%/}/prime}"
-INSTALL_DIR="${PRIME_INSTALL_DIR:-$HOME/.local/bin}"
-BIN_NAME="${PRIME_BIN_NAME:-prime}"
-CURL_CONNECT_TIMEOUT="${PRIME_CURL_CONNECT_TIMEOUT:-10}"
-CURL_MAX_TIME="${PRIME_CURL_MAX_TIME:-30}"
-CURL_RETRY="${PRIME_CURL_RETRY:-2}"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/prime"
-CONFIG_FILE="$CONFIG_DIR/config"
+RED='\033[91m'
+GRN='\033[92m'
+YLW='\033[93m'
+BLU='\033[94m'
+RST='\033[0m'
+BOLD='\033[1m'
 
-green() { printf '\033[92m%s\033[0m\n' "$*"; }
-yellow() { printf '\033[93m%s\033[0m\n' "$*"; }
-red() { printf '\033[91m%s\033[0m\n' "$*"; }
+log() { echo -e "${BLU}→${RST} $1"; }
+ok() { echo -e "${GRN}✓${RST} $1"; }
+warn() { echo -e "${YLW}!${RST} $1"; }
+error() { echo -e "${RED}✗${RST} $1" >&2; }
 
-require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    red "Missing required command: $1"
-    exit 1
-  fi
+banner() {
+    echo
+    echo -e "${BOLD}${BLU}╔════════════════════════════════════════════╗${RST}"
+    echo -e "${BOLD}${BLU}║${RST}        ${BOLD}PRIME AI AGENT PLATFORM${RST}          ${BLU}║${RST}"
+    echo -e "${BOLD}${BLU}╚════════════════════════════════════════════╝${RST}"
+    echo
 }
 
-is_project_root() {
-  local dir="$1"
-  [ -f "$dir/docker-compose.yml" ] && [ -f "$dir/scripts/onboard.py" ]
+check_docker() {
+    log "Checking Docker..."
+    
+    if ! command -v docker &>/dev/null; then
+        error "Docker not found"
+        echo "Install: curl -fsSL https://get.docker.com | sh"
+        exit 1
+    fi
+    
+    if ! docker info &>/dev/null; then
+        error "Docker daemon not running"
+        exit 1
+    fi
+    
+    if ! docker compose version &>/dev/null; then
+        error "Docker Compose v2 not found"
+        exit 1
+    fi
+    
+    ok "Docker OK"
 }
 
-write_prime_home_if_known() {
-  local project_root="${PRIME_HOME:-}"
-  if [ -z "$project_root" ] && is_project_root "$PWD"; then
-    project_root="$PWD"
-  fi
-  if [ -z "$project_root" ]; then
-    return 0
-  fi
-  mkdir -p "$CONFIG_DIR"
-  printf 'PRIME_HOME=%s\n' "$project_root" > "$CONFIG_FILE"
-  green "Configured PRIME_HOME=$project_root"
+setup_env() {
+    if [[ ! -f .env ]]; then
+        log "Creating .env..."
+        
+        SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+        JWT=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+        DBPASS=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
+        
+        cat > .env << EOF
+# Prime Configuration
+SECRET_KEY=$SECRET
+JWT_SECRET=$JWT
+DB_USER=prime
+DB_PASSWORD=$DBPASS
+DOMAIN=localhost
+EMAIL=admin@localhost
+WORKERS=4
+EOF
+        chmod 600 .env
+        ok "Created .env"
+    else
+        ok ".env already exists"
+    fi
+}
+
+create_cli() {
+    BIN_DIR="${HOME}/.local/bin"
+    mkdir -p "$BIN_DIR"
+    
+    PRIME_DIR="$(pwd)"
+    
+    cat > "$BIN_DIR/prime" << EOF
+#!/bin/bash
+export PRIME_HOME="$PRIME_DIR"
+cd "$PRIME_DIR"
+
+case "\${1:-}" in
+    status)
+        curl -sf http://localhost:8000/api/healthz 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "Prime is offline"
+        ;;
+    up|start)
+        docker compose up -d
+        echo "✓ Prime started"
+        echo "API: http://localhost:8000"
+        ;;
+    down|stop)
+        docker compose down
+        echo "✓ Prime stopped"
+        ;;
+    logs)
+        docker compose logs -f
+        ;;
+    *)
+        docker compose "\$@"
+        ;;
+esac
+EOF
+    chmod +x "$BIN_DIR/prime"
+    ok "CLI installed to $BIN_DIR/prime"
+    
+    if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+        echo "export PATH=\"$BIN_DIR:\$PATH\"" >> ~/.bashrc
+        export PATH="$BIN_DIR:$PATH"
+        ok "Added to PATH"
+    fi
+}
+
+start_prime() {
+    log "Starting Prime..."
+    docker compose up -d --wait 2>&1 | tail -3
+    ok "Prime is running!"
+}
+
+print_success() {
+    echo
+    echo -e "${BOLD}${GRN}╔════════════════════════════════════════════╗${RST}"
+    echo -e "${BOLD}${GRN}║${RST}         ${GRN}✓ PRIME INSTALLED${RST}                ${GRN}║${RST}"
+    echo -e "${BOLD}${GRN}╚════════════════════════════════════════════╝${RST}"
+    echo
+    echo "Commands:"
+    echo "  prime status     # Check health"
+    echo "  prime up         # Start services"  
+    echo "  prime down       # Stop services"
+    echo "  prime logs       # View logs"
+    echo
+    echo "API: http://localhost:8000/api"
+    echo "Docs: http://localhost:8000/docs"
+    echo
 }
 
 main() {
-  require_cmd curl
-  require_cmd bash
-
-  mkdir -p "$INSTALL_DIR"
-
-  TMP_FILE="$(mktemp)"
-  trap 'rm -f "${TMP_FILE:-}"' EXIT
-
-  echo "Downloading ${BIN_NAME} from ${BIN_URL}..."
-  if ! curl \
-      --connect-timeout "$CURL_CONNECT_TIMEOUT" \
-      --max-time "$CURL_MAX_TIME" \
-      --retry "$CURL_RETRY" \
-      --retry-delay 1 \
-      --retry-connrefused \
-      -fsSL "$BIN_URL" \
-      -o "$TMP_FILE"; then
-    red "Failed to download CLI from ${BIN_URL}"
-    yellow "Check DNS/firewall/TLS for ${BASE_URL} and retry."
-    yellow "You can override timeouts: PRIME_CURL_CONNECT_TIMEOUT=10 PRIME_CURL_MAX_TIME=30"
-    exit 1
-  fi
-
-  chmod +x "$TMP_FILE"
-  mv "$TMP_FILE" "$INSTALL_DIR/$BIN_NAME"
-  TMP_FILE=""
-  green "Installed: $INSTALL_DIR/$BIN_NAME"
-
-  write_prime_home_if_known
-
-  if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    yellow "Add this to your shell profile:"
-    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
-  fi
-
-  echo
-  green "Done."
-  echo "Try:"
-  echo "  $BIN_NAME help"
-  echo "  $BIN_NAME status"
+    banner
+    check_docker
+    setup_env
+    create_cli
+    start_prime
+    print_success
 }
 
 main "$@"

@@ -1,0 +1,70 @@
+# Prime Backend - Production Build
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir --user \
+    fastapi>=0.115.0 \
+    uvicorn[standard]>=0.30.0 \
+    sqlalchemy>=2.0.0 \
+    psycopg>=3.0.0 \
+    pydantic>=2.0.0 \
+    pyyaml>=6.0.0 \
+    python-dotenv>=1.0.0 \
+    httpx>=0.27.0 \
+    aiohttp>=3.9.0 \
+    aiosqlite>=0.20.0 \
+    python-jose[cryptography]>=3.3.0 \
+    passlib[bcrypt]>=1.7.0 \
+    python-multipart>=0.0.6 \
+    prometheus-client>=0.17.0
+
+# Production stage
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Copy application
+COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+
+# Environment
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Non-root user (optional, but good for security)
+# RUN useradd -m -u 1000 prime && chown -R prime:prime /app
+# USER prime
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/api/healthz || exit 1
+
+# Run with multiple workers for production
+CMD exec uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers ${WORKERS:-4} \
+    --loop uvloop \
+    --http h11 \
+    --proxy-headers \
+    --forwarded-allow-ips '*'

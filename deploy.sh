@@ -1,149 +1,201 @@
 #!/usr/bin/env bash
-# deploy.sh — one-command production deployment for MultiBot
-# Usage: bash deploy.sh
+# Prime Production Deployment Script
+# Usage: ./deploy.sh [domain] [email]
+
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$REPO_DIR"
+RED='\033[91m'
+GRN='\033[92m'
+YLW='\033[93m'
+BLU='\033[94m'
+RST='\033[0m'
+BOLD='\033[1m'
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+log() { echo -e "${BLU}→${RST} $1"; }
+ok() { echo -e "${GRN}✓${RST} $1"; }
+warn() { echo -e "${YLW}!${RST} $1"; }
+error() { echo -e "${RED}✗${RST} $1" >&2; }
 
-info()  { echo -e "${GREEN}[✓]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
-error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
-step()  { echo -e "\n${CYAN}──────────────────────────────────────────${NC}"; echo -e "${CYAN}  $*${NC}"; echo -e "${CYAN}──────────────────────────────────────────${NC}"; }
+banner() {
+    echo
+    echo -e "${BOLD}${BLU}╔════════════════════════════════════════════╗${RST}"
+    echo -e "${BOLD}${BLU}║${RST}    ${BOLD}PRIME PRODUCTION DEPLOYMENT${RST}          ${BLU}║${RST}"
+    echo -e "${BOLD}${BLU}╚════════════════════════════════════════════╝${RST}"
+    echo
+}
 
-# ─── 1. Check prerequisites ────────────────────────────────────────────────────
-step "Checking prerequisites"
+# Default values
+DOMAIN="${1:-}"
+EMAIL="${2:-}"
 
-command -v docker >/dev/null 2>&1 \
-  || error "Docker not found. Install: https://docs.docker.com/engine/install/"
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-docker compose version >/dev/null 2>&1 \
-  || error "Docker Compose V2 not found. Update Docker or install docker-compose-plugin."
+# Check prerequisites
+check_prereqs() {
+    log "Checking prerequisites..."
+    
+    if ! command -v docker &>/dev/null; then
+        error "Docker not found"
+        echo "Install: curl -fsSL https://get.docker.com | sh"
+        exit 1
+    fi
+    
+    if ! docker compose version &>/dev/null; then
+        error "Docker Compose v2 not found"
+        exit 1
+    fi
+    
+    if [[ "$EUID" -ne 0 ]] && ! groups | grep -q docker; then
+        error "Need docker access. Run as root or add user to docker group"
+        exit 1
+    fi
+    
+    ok "Prerequisites OK"
+}
 
-info "Docker $(docker --version | cut -d' ' -f3 | tr -d ',')"
-info "Docker Compose $(docker compose version --short)"
+# Generate secure secrets
+generate_secrets() {
+    log "Generating secrets..."
+    
+    if [[ ! -f .env ]]; then
+        if [[ -f .env.example ]]; then
+            cp .env.example .env
+        fi
+    fi
+    
+    # Generate secrets if not set
+    if ! grep -q "SECRET_KEY=change-me" .env 2>/dev/null; then
+        ok "Secrets already configured"
+        return
+    fi
+    
+    SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+    JWT=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+    DB_PASS=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
+    
+    # Update .env
+    sed -i "s/SECRET_KEY=.*/SECRET_KEY=$SECRET/" .env
+    sed -i "s/JWT_SECRET=.*/JWT_SECRET=$JWT/" .env
+    sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+    
+    if [[ -n "$DOMAIN" ]]; then
+        sed -i "s/DOMAIN=.*/DOMAIN=$DOMAIN/" .env
+    fi
+    
+    if [[ -n "$EMAIL" ]]; then
+        sed -i "s/EMAIL=.*/EMAIL=$EMAIL/" .env
+    fi
+    
+    chmod 600 .env
+    ok "Secrets generated"
+}
 
-# ─── 2. .env file ─────────────────────────────────────────────────────────────
-step "Checking .env configuration"
+# Deploy application
+deploy() {
+    log "Deploying Prime..."
+    
+    # Pull latest images
+    docker compose -f docker-compose.prod.yml pull 2>/dev/null || true
+    
+    # Build backend
+    docker compose -f docker-compose.prod.yml build backend
+    
+    # Stop existing
+    docker compose -f docker-compose.prod.yml down --remove-orphans
+    
+    # Start services
+    docker compose -f docker-compose.prod.yml up -d
+    
+    # Wait for health
+    log "Waiting for services..."
+    sleep 10
+    
+    # Health check
+    if curl -sf http://localhost/api/healthz &>/dev/null; then
+        ok "Prime is healthy!"
+    else
+        warn "Health check pending, checking logs..."
+        docker compose -f docker-compose.prod.yml logs --tail 20 backend
+    fi
+}
 
-if [[ ! -f .env ]]; then
-  if [[ -f .env.example ]]; then
-    cp .env.example .env
-    warn ".env was missing — copied from .env.example"
-    echo ""
-    echo "  Please edit .env now and set the required values:"
-    echo "    DOMAIN       — your domain or VPS IP (e.g. 203.0.113.10 or bot.example.com)"
-    echo "    DB_PASSWORD  — strong database password"
-    echo "    SECRET_KEY   — run: openssl rand -hex 32"
-    echo "    JWT_SECRET   — run: openssl rand -hex 32"
-    echo ""
-    error "Edit .env and re-run this script."
-  else
-    error ".env is missing and no .env.example found."
-  fi
-fi
+# Setup auto-updates
+setup_watchtower() {
+    log "Setting up auto-updates..."
+    
+    docker run -d \
+        --name watchtower \
+        --restart always \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        containrrr/watchtower \
+        --cleanup \
+        --interval 3600 \
+        prime-backend-1 prime-browser-bridge-1 2>/dev/null || warn "Watchtower already running"
+    
+    ok "Auto-updates configured"
+}
 
-# Source .env (ignore lines starting with # and empty lines)
-set -a
-# shellcheck disable=SC1090
-source <(grep -v '^#' .env | grep -v '^$')
-set +a
+# Setup log rotation
+setup_logs() {
+    log "Setting up log rotation..."
+    
+    if [[ -d /etc/logrotate.d ]]; then
+        cat > /etc/logrotate.d/prime << 'EOF'
+/var/lib/docker/containers/*/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+EOF
+        ok "Log rotation configured"
+    fi
+}
 
-# ─── 3. Validate required variables ───────────────────────────────────────────
-MISSING=()
-for VAR in DOMAIN DB_PASSWORD SECRET_KEY JWT_SECRET; do
-  [[ -z "${!VAR:-}" ]] && MISSING+=("$VAR")
-done
+# Print final info
+print_info() {
+    echo
+    echo -e "${BOLD}${GRN}╔════════════════════════════════════════════╗${RST}"
+    echo -e "${BOLD}${GRN}║${RST}      ${GRN}✓ DEPLOYMENT COMPLETE${RST}               ${GRN}║${RST}"
+    echo -e "${BOLD}${GRN}╚════════════════════════════════════════════╝${RST}"
+    echo
+    echo "Access your Prime instance:"
+    
+    if [[ -n "$DOMAIN" ]] && [[ "$DOMAIN" != "localhost" ]]; then
+        echo "  🌐 https://$DOMAIN/api"
+        echo "  📖 https://$DOMAIN/docs"
+    else
+        echo "  🌐 http://localhost/api"
+        echo "  📖 http://localhost/docs"
+    fi
+    
+    echo
+    echo "Useful commands:"
+    echo "  ./deploy.sh              # Redeploy"
+    echo "  docker compose -f docker-compose.prod.yml logs -f"
+    echo "  docker compose -f docker-compose.prod.yml ps"
+    echo
+    echo "Backup database:"
+    echo "  docker compose -f docker-compose.prod.yml exec db pg_dump -U prime prime > backup.sql"
+    echo
+}
 
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-  error "Missing required variables in .env: ${MISSING[*]}"
-fi
+# Main
+main() {
+    banner
+    
+    check_prereqs
+    generate_secrets
+    deploy
+    setup_watchtower
+    setup_logs
+    
+    print_info
+}
 
-# Warn if secrets look like placeholders
-for VAR in SECRET_KEY JWT_SECRET DB_PASSWORD; do
-  VALUE="${!VAR}"
-  if [[ "$VALUE" == *"replace_me"* ]] || [[ "$VALUE" == *"CHANGE_ME"* ]] || [[ "$VALUE" == *"replace"* ]]; then
-    error "$VAR looks like a placeholder. Generate a real value:\n  openssl rand -hex 32"
-  fi
-done
-
-info "DOMAIN = ${DOMAIN}"
-info "DB_PASSWORD is set"
-info "SECRET_KEY is set"
-info "JWT_SECRET is set"
-
-# ─── 4. Check prime binary ────────────────────────────────────────────────────
-step "Checking files"
-
-if [[ ! -f prime ]]; then
-  warn "prime binary not found — the CLI install script will be broken."
-  warn "Build the prime CLI and copy it to: $REPO_DIR/prime"
-else
-  info "prime binary found"
-fi
-
-if [[ ! -f install.sh ]]; then
-  warn "install.sh not found — /install.sh endpoint will 404"
-else
-  info "install.sh found"
-fi
-
-# ─── 5. Build images ──────────────────────────────────────────────────────────
-step "Building production Docker images"
-docker compose -f docker-compose.prod.yml build --pull
-
-# ─── 6. Start services ────────────────────────────────────────────────────────
-step "Starting services"
-docker compose -f docker-compose.prod.yml up -d
-
-# Give DB a moment if it was freshly created
-sleep 3
-
-# ─── 7. Verify health ─────────────────────────────────────────────────────────
-step "Verifying deployment"
-
-# Check all containers are running
-FAILED=()
-for SERVICE in db backend frontend landing caddy; do
-  STATUS=$(docker compose -f docker-compose.prod.yml ps --format json "$SERVICE" 2>/dev/null \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','?'))" 2>/dev/null || echo "unknown")
-  if [[ "$STATUS" == "running" ]]; then
-    info "$SERVICE — running"
-  else
-    warn "$SERVICE — status: $STATUS"
-    FAILED+=("$SERVICE")
-  fi
-done
-
-if [[ ${#FAILED[@]} -gt 0 ]]; then
-  warn "Some services may not be healthy. Check logs with:"
-  warn "  docker compose -f docker-compose.prod.yml logs ${FAILED[*]}"
-fi
-
-# ─── 8. Done ──────────────────────────────────────────────────────────────────
-step "Deployment complete"
-
-SCHEME="https"
-# If DOMAIN looks like an IP address, TLS won't work — use http
-if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  SCHEME="http"
-  warn "DOMAIN is an IP address — Caddy cannot get a TLS certificate for it."
-  warn "Use a real domain name, or access via http for testing."
-fi
-
-echo ""
-echo -e "  Landing page:    ${CYAN}${SCHEME}://${DOMAIN}${NC}"
-echo -e "  Admin dashboard: ${CYAN}${SCHEME}://${DOMAIN}/dashboard${NC}"
-echo -e "  API docs:        ${CYAN}${SCHEME}://${DOMAIN}/api/docs${NC}"
-echo ""
-echo "Useful commands:"
-echo "  docker compose -f docker-compose.prod.yml logs -f          # stream all logs"
-echo "  docker compose -f docker-compose.prod.yml logs -f backend  # backend logs only"
-echo "  docker compose -f docker-compose.prod.yml down             # stop everything"
-echo "  docker compose -f docker-compose.prod.yml pull && bash deploy.sh  # update"
+main "$@"

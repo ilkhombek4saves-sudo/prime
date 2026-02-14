@@ -18,8 +18,6 @@ services:
       - .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Alternative for Linux without Docker Desktop: uncomment and set host IP
-    # network_mode: host
     depends_on:
       - db
     ports:
@@ -31,66 +29,10 @@ services:
       - ./backend/tests:/app/tests
       - ./config:/app/config
       - ./scripts:/app/scripts
-      # Docker socket for sandbox execution (Phase 1 - sandbox service)
+      # Docker socket for sandbox execution
       - /var/run/docker.sock:/var/run/docker.sock
 
-  frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    command: >
-      sh -lc "npm install --include=optional
-      && ROLLUP_VERSION=$$(node -p \"require('./node_modules/rollup/package.json').version\")
-      && ROLLUP_PKG=$$(node -p \"const libc = (process.report?.getReport()?.header?.glibcVersionRuntime ? 'gnu' : 'musl'); '@rollup/rollup-linux-' + process.arch + '-' + libc\")
-      && npm install --no-save $$ROLLUP_PKG@$$ROLLUP_VERSION
-      && npm run dev -- --host 0.0.0.0 --port 5173"
-    environment:
-      - VITE_BACKEND_URL=http://backend:8000
-    depends_on:
-      - backend
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-
-  installer:
-    image: nginx:1.27-alpine
-    ports:
-      - "8081:80"
-    volumes:
-      - ./install.sh:/usr/share/nginx/html/install.sh:ro
-      - ./prime:/usr/share/nginx/html/prime:ro
-      - ./infrastructure/nginx/installer.conf:/etc/nginx/conf.d/default.conf:ro
-
-  landing:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./app:/app
-      - /app/node_modules
-
-  installer-public:
-    image: caddy:2.8-alpine
-    depends_on:
-      - installer
-      - landing
-      - backend
-      - frontend
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./install.sh:/srv/install.sh:ro
-      - ./prime:/srv/prime:ro
-      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-
-  # ── Phase 2: Browser automation bridge (Playwright + Node.js) ────────────────
+  # ── Browser automation bridge (Playwright + Node.js) ────────────────
   browser-bridge:
     build:
       context: ./browser
@@ -102,7 +44,7 @@ services:
       - backend
     restart: unless-stopped
 
-  # ── Phase 3: Tailscale sidecar (optional — enable with: docker compose --profile tailscale up) ──
+  # ── Tailscale sidecar (optional — enable with: docker compose --profile tailscale up) ──
   tailscale:
     image: tailscale/tailscale:latest
     profiles: [tailscale]
@@ -122,6 +64,4 @@ services:
 
 volumes:
   pg_data:
-  caddy_data:
-  caddy_config:
   tailscale_state:

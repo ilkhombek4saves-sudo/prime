@@ -1,72 +1,150 @@
+version: '3.8'
+
 services:
+  # PostgreSQL с бэкапами
   db:
-    image: postgres:16
+    image: postgres:16-alpine
     restart: always
     environment:
-      POSTGRES_DB: multibot
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      POSTGRES_DB: prime
+      POSTGRES_USER: ${DB_USER:-prime}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme-strong-password}
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ./backups:/backups
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d multibot"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-prime}"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+    networks:
+      - prime
+    command: >
+      postgres 
+      -c shared_buffers=256MB
+      -c effective_cache_size=768MB
+      -c maintenance_work_mem=64MB
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=8MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
 
+  # Backend API
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile.prod
     restart: always
-    env_file: .env
-    # Override DATABASE_URL so it uses the DB_PASSWORD env var.
-    # This takes precedence over the value in .env.
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${DB_PASSWORD}@db:5432/multibot
-      APP_ENV: production
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # Run migrations then start uvicorn with 2 workers for better concurrency
-    command: >
-      sh -c "alembic upgrade head &&
-             exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+      - DATABASE_URL=postgresql+psycopg://${DB_USER:-prime}:${DB_PASSWORD:-changeme-strong-password}@db:5432/prime
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - APP_ENV=production
+      - APP_PORT=8000
+      - WORKERS=${WORKERS:-4}
+      - TELEGRAM_BOT_TOKENS=${TELEGRAM_BOT_TOKENS:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      - prime
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  frontend:
+  # Browser Bridge
+  browser-bridge:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile.prod
+      context: ./browser
     restart: always
+    environment:
+      - BROWSER_BRIDGE_PORT=3001
+    networks:
+      - prime
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  landing:
-    build:
-      context: .
-      dockerfile: app/Dockerfile.prod
-    restart: always
-
+  # Caddy Reverse Proxy с HTTPS
   caddy:
     image: caddy:2.8-alpine
     restart: always
-    depends_on:
-      - backend
-      - frontend
-      - landing
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:?Set DOMAIN in .env (e.g. DOMAIN=yourdomain.com)}
+      - "443:443/udp"
     volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./install.sh:/srv/install.sh:ro
       - ./prime:/srv/prime:ro
-      - ./infrastructure/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - EMAIL=${EMAIL:-admin@example.com}
+    networks:
+      - prime
+    depends_on:
+      - backend
+
+  # Redis для кэша и очередей (опционально)
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - prime
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    profiles:
+      - redis
+
+  # Автобэкапы БД
+  backup:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=prime
+      - POSTGRES_USER=${DB_USER:-prime}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme-strong-password}
+      - BACKUP_DIR=/backups
+      - RETENTION_DAYS=7
+    volumes:
+      - pg_backups:/backups
+    networks:
+      - prime
+    command: >
+      sh -c '
+        apk add --no-cache cronie
+        echo "0 2 * * * pg_dump -h db -U $$POSTGRES_USER -d $$POSTGRES_DB | gzip > $$BACKUP_DIR/prime-$$(date +\%Y\%m\%d-\%H\%M\%S).sql.gz && find $$BACKUP_DIR -name '*.sql.gz' -mtime +$$RETENTION_DAYS -delete" | crontab -
+        crond -f
+      '
+    depends_on:
+      - db
+    profiles:
+      - backup
+
+networks:
+  prime:
+    driver: bridge
 
 volumes:
   pg_data:
+  pg_backups:
   caddy_data:
   caddy_config:
+  redis_data:

@@ -7,6 +7,7 @@ from app.api import (
     bots,
     health,
     knowledge_bases,
+    node_executions,
     organizations,
     pairing,
     plugins,
@@ -53,3 +54,4 @@ api_router.include_router(skills_router)
 api_router.include_router(tailscale_router)
 api_router.include_router(doctor_router)
 api_router.include_router(security_router)
+api_router.include_router(node_executions.router)

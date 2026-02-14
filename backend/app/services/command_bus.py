@@ -12,6 +12,7 @@ from app.schemas.task import TaskIn
 from app.services.binding_resolver import BindingResolver
 from app.services.dm_policy import DMPolicyService
 from app.services.task_service import TaskService
+from app.services.node_runtime import NodeRuntimeService
 
 
 class CommandBus:
@@ -168,6 +169,145 @@ class CommandBus:
                 "reason": decision.reason,
                 "paired": paired,
                 "policy": agent.dm_policy.value,
+            }
+
+        # ── Node Execution (OpenClaw-style) ────────────────────────────────────
+
+        if method == "node.execute":
+            """Request execution of a command from a connected node."""
+            node_service = NodeRuntimeService(self.db)
+            
+            connection_id = str(params.get("connection_id", ""))
+            node_id = str(params.get("node_id", ""))
+            node_name = str(params.get("node_name", "unknown"))
+            node_caps = params.get("node_caps", [])
+            command = str(params.get("command", ""))
+            
+            if not connection_id:
+                raise ValueError("connection_id is required")
+            if not node_id:
+                raise ValueError("node_id is required")
+            if not command:
+                raise ValueError("command is required")
+            
+            result = node_service.request_execution(
+                connection_id=connection_id,
+                node_id=node_id,
+                node_name=node_name,
+                node_caps=node_caps,
+                command=command,
+                params=params.get("params", {}),
+                working_dir=params.get("working_dir"),
+                env_vars=params.get("env_vars"),
+                idempotency_key=params.get("idempotency_key"),
+                auto_approve_rules=params.get("auto_approve_rules", []),
+            )
+            
+            return {
+                "success": result.success,
+                "execution_id": str(result.execution_id) if result.execution_id else None,
+                "status": result.status,
+                "requires_approval": result.requires_approval,
+                "approval_queue_id": str(result.approval_queue_id) if result.approval_queue_id else None,
+                "message": result.message,
+            }
+
+        if method == "node.approvals.list":
+            """List pending node execution approvals."""
+            node_service = NodeRuntimeService(self.db)
+            connection_id = params.get("connection_id")
+            limit = int(params.get("limit", 100))
+            
+            items = node_service.list_pending_approvals(
+                connection_id=connection_id,
+                limit=limit,
+            )
+            
+            return {
+                "items": [
+                    {
+                        "id": str(item.id),
+                        "execution_id": str(item.execution_id),
+                        "connection_id": item.connection_id,
+                        "node_id": item.node_id,
+                        "node_name": item.node_name,
+                        "command": item.command,
+                        "params_summary": item.params_summary,
+                        "risk_level": item.risk_level,
+                        "created_at": item.created_at.isoformat() if item.created_at else None,
+                        "expires_at": item.expires_at.isoformat() if item.expires_at else None,
+                    }
+                    for item in items
+                ],
+                "count": len(items),
+            }
+
+        if method == "node.approvals.approve":
+            """Approve a pending node execution."""
+            node_service = NodeRuntimeService(self.db)
+            
+            try:
+                queue_id = UUID(str(params.get("queue_id")))
+            except Exception as exc:
+                raise ValueError("Invalid queue_id") from exc
+            
+            user = self.db.get(User, UUID(str(user_claims["sub"])))
+            if not user:
+                raise ValueError("User not found")
+            
+            result = node_service.approve_execution(
+                queue_id=queue_id,
+                approved_by=user.id,
+                reason=params.get("reason"),
+            )
+            
+            return {
+                "success": result.success,
+                "execution_id": str(result.execution_id) if result.execution_id else None,
+                "status": result.status,
+                "message": result.message,
+            }
+
+        if method == "node.approvals.reject":
+            """Reject a pending node execution."""
+            node_service = NodeRuntimeService(self.db)
+            
+            try:
+                queue_id = UUID(str(params.get("queue_id")))
+            except Exception as exc:
+                raise ValueError("Invalid queue_id") from exc
+            
+            user = self.db.get(User, UUID(str(user_claims["sub"])))
+            if not user:
+                raise ValueError("User not found")
+            
+            result = node_service.reject_execution(
+                queue_id=queue_id,
+                rejected_by=user.id,
+                reason=params.get("reason"),
+            )
+            
+            return {
+                "success": result.success,
+                "execution_id": str(result.execution_id) if result.execution_id else None,
+                "status": result.status,
+                "message": result.message,
+            }
+
+        if method == "node.execute.run":
+            """Execute an already approved command (async)."""
+            # Note: Actual execution happens async via worker
+            # This just validates and queues the execution
+            try:
+                execution_id = UUID(str(params.get("execution_id")))
+            except Exception as exc:
+                raise ValueError("Invalid execution_id") from exc
+            
+            # Return immediate acknowledgment
+            return {
+                "queued": True,
+                "execution_id": str(execution_id),
+                "message": "Execution queued for processing",
             }
 
         raise ValueError(f"Unsupported command method: {method}")

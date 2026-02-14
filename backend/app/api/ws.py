@@ -74,9 +74,15 @@ METHOD_SCOPE_MAP = {
     "tasks.retry": "tasks.write",
     "bindings.resolve": "routing.read",
     "policy.dm_check": "policy.read",
+    # Node execution scopes (OpenClaw-style)
+    "node.execute": "node.exec",
+    "node.execute.run": "node.exec",
+    "node.approvals.list": "node.approvals.read",
+    "node.approvals.approve": "node.approvals.write",
+    "node.approvals.reject": "node.approvals.write",
 }
 
-SIDE_EFFECT_METHODS = {"tasks.create", "tasks.retry"}
+SIDE_EFFECT_METHODS = {"tasks.create", "tasks.retry", "node.execute", "node.execute.run", "node.approvals.approve", "node.approvals.reject"}
 
 
 def _next_seq(connection_id: str) -> int:
@@ -233,6 +239,13 @@ async def events_socket(websocket: WebSocket):
                             "stream.chunk",
                             "stream.end",
                             "stream.error",
+                            # Node execution events (OpenClaw-style)
+                            "node.execution.pending_approval",
+                            "node.execution.approved",
+                            "node.execution.rejected",
+                            "node.execution.started",
+                            "node.execution.completed",
+                            "node.execution.failed",
                         ],
                     },
                     "snapshot": {

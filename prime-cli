@@ -1,10 +1,369 @@
 #!/usr/bin/env python3
-"""Prime CLI entry point"""
-import sys
+"""
+Prime CLI — Terminal interface for Prime AI Agent Platform
+OpenClaw-style command-line interface
+"""
+
 import os
+import sys
+import json
+import argparse
+from pathlib import Path
+from typing import Optional
 
-# Ensure project root is in Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import httpx
+from urllib.parse import urljoin
 
-from prime.cli import main
-main()
+# Configuration
+DEFAULT_API_URL = os.getenv("PRIME_API_URL", "http://localhost:8000")
+CONFIG_DIR = Path.home() / ".config" / "prime"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+# Colors
+R = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[91m"
+GRN = "\033[92m"
+YLW = "\033[93m"
+BLU = "\033[94m"
+CYN = "\033[96m"
+MAG = "\033[95m"
+
+
+def load_config() -> dict:
+    """Load CLI configuration."""
+    if CONFIG_FILE.exists():
+        return json.loads(CONFIG_FILE.read_text())
+    return {}
+
+
+def save_config(config: dict):
+    """Save CLI configuration."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+
+def get_token() -> Optional[str]:
+    """Get auth token from config or env."""
+    config = load_config()
+    return config.get("token") or os.getenv("PRIME_TOKEN")
+
+
+def api_request(method: str, path: str, **kwargs) -> dict:
+    """Make API request with authentication."""
+    token = get_token()
+    headers = kwargs.pop("headers", {})
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    
+    url = urljoin(DEFAULT_API_URL, f"/api{path}")
+    
+    try:
+        resp = httpx.request(method, url, headers=headers, timeout=30, **kwargs)
+        if resp.status_code == 401:
+            print(f"{RED}✗{R} Authentication required. Run: prime auth login")
+            sys.exit(1)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except httpx.HTTPError as e:
+        print(f"{RED}✗{R} API Error: {e}")
+        sys.exit(1)
+
+
+# ── Commands ──────────────────────────────────────────────────────────────────
+
+def cmd_status(args):
+    """Show system status."""
+    print(f"\n{BOLD}{CYN}{'=' * 50}")
+    print(f"  PRIME STATUS")
+    print(f"{'=' * 50}{R}\n")
+    
+    # Health check
+    try:
+        health = httpx.get(f"{DEFAULT_API_URL}/api/healthz", timeout=5).json()
+        db_status = f"{GRN}✓{R} Connected" if health.get("db") else f"{RED}✗{R} Error"
+        print(f"  {GRN}✓{R} API: {GRN}Online{R}")
+        print(f"  {db_status} Database")
+    except Exception as e:
+        print(f"  {RED}✗{R} API: {RED}Offline{R} ({e})")
+        return
+    
+    # User info
+    token = get_token()
+    if token:
+        try:
+            me = api_request("GET", "/auth/me")
+            print(f"\n{BOLD}User:{R}")
+            print(f"  • Username: {me.get('username', 'unknown')}")
+            print(f"  • Role: {me.get('role', 'unknown')}")
+        except:
+            print(f"\n{YLW}!{R} Token invalid. Run: prime auth login")
+    else:
+        print(f"\n{YLW}!{R} Not logged in. Run: prime auth login")
+    
+    print()
+
+
+def cmd_login(args):
+    """Authenticate with Prime."""
+    print(f"\n{BOLD}Prime Login{R}\n")
+    
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    
+    try:
+        resp = httpx.post(
+            f"{DEFAULT_API_URL}/api/auth/login",
+            json={"username": username, "password": password},
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        config = load_config()
+        config["token"] = data["access_token"]
+        save_config(config)
+        
+        print(f"\n{GRN}✓{R} Login successful!")
+        print(f"  Token saved to {CONFIG_FILE}")
+    except httpx.HTTPError as e:
+        print(f"\n{RED}✗{R} Login failed: {e}")
+        sys.exit(1)
+
+
+def cmd_logout(args):
+    """Logout from Prime."""
+    config = load_config()
+    if "token" in config:
+        del config["token"]
+        save_config(config)
+    print(f"{GRN}✓{R} Logged out")
+
+
+def cmd_whoami(args):
+    """Show current user."""
+    token = get_token()
+    if not token:
+        print(f"{YLW}!{R} Not logged in")
+        return
+    
+    me = api_request("GET", "/auth/me")
+    print(f"\n{BOLD}User:{R}")
+    print(f"  Username: {me.get('username')}")
+    print(f"  Email: {me.get('email')}")
+    print(f"  Role: {me.get('role')}")
+    print(f"  ID: {me.get('id')}")
+    print()
+
+
+def cmd_doctor(args):
+    """Run diagnostics."""
+    print(f"\n{BOLD}Running diagnostics...{R}\n")
+    
+    try:
+        result = api_request("GET", "/doctor")
+        
+        passed = result.get("passed", 0)
+        failed = result.get("failed", 0)
+        total = result.get("total", 0)
+        
+        print(f"Checks: {GRN}{passed} passed{R}, {RED if failed else GRN}{failed} failed{R} of {total}\n")
+        
+        for check in result.get("checks", []):
+            status = f"{GRN}✓{R}" if check["ok"] else f"{RED}✗{R}"
+            print(f"  {status} {check['label']}: {check['detail']}")
+            if not check["ok"] and check.get("fix"):
+                print(f"      {YLW}→{R} {check['fix']}")
+        
+        print()
+    except Exception as e:
+        print(f"{RED}✗{R} Diagnostics failed: {e}\n")
+
+
+# ── Node Execution Commands ───────────────────────────────────────────────────
+
+def cmd_node_execute(args):
+    """Execute command through node runtime."""
+    print(f"\n{BOLD}Node Execution{R}\n")
+    
+    # Parse capabilities
+    caps = args.caps.split(",") if args.caps else ["exec", "trusted"]
+    
+    payload = {
+        "connection_id": args.connection or "cli",
+        "node_id": args.node or "cli-node",
+        "node_name": args.node or "CLI Node",
+        "node_caps": caps,
+        "command": args.command,
+        "params": {"args": args.args} if args.args else {},
+    }
+    
+    print(f"Command: {CYN}{args.command}{R}")
+    if args.args:
+        print(f"Args: {args.args}")
+    print(f"Caps: {', '.join(caps)}\n")
+    
+    result = api_request("POST", "/node-executions/request", json=payload)
+    
+    if result.get("requires_approval"):
+        print(f"{YLW}!{R} Command requires approval")
+        print(f"  Execution ID: {result.get('execution_id')}")
+        print(f"  Queue ID: {result.get('approval_queue_id')}")
+        print(f"\n  Run: prime node approve {result.get('approval_queue_id')}")
+    elif result.get("success"):
+        print(f"{GRN}✓{R} {result.get('message')}")
+        print(f"  Execution ID: {result.get('execution_id')}")
+        if result.get("status") == "approved":
+            print(f"\n  Run: prime node run {result.get('execution_id')}")
+    else:
+        print(f"{RED}✗{R} {result.get('message')}")
+
+
+def cmd_node_approvals(args):
+    """List pending approvals."""
+    print(f"\n{BOLD}Pending Approvals{R}\n")
+    
+    result = api_request("GET", "/node-executions/approvals/pending")
+    items = result.get("items", [])
+    
+    if not items:
+        print(f"  {DIM}No pending approvals{R}")
+    else:
+        for item in items:
+            risk_color = RED if item["risk_level"] == "critical" else YLW if item["risk_level"] == "high" else ""
+            print(f"  {CYN}{item['id'][:8]}{R} {risk_color}[{item['risk_level']}]{R}")
+            print(f"    Node: {item['node_name']}")
+            print(f"    Command: {BOLD}{item['command']}{R}")
+            print(f"    Created: {item['created_at'][:19]}")
+            print(f"    {DIM}prime node approve {item['id']}{R}")
+            print()
+    
+    print(f"Total: {len(items)} pending\n")
+
+
+def cmd_node_approve(args):
+    """Approve a pending execution."""
+    queue_id = args.queue_id
+    
+    result = api_request(
+        "POST",
+        f"/node-executions/approvals/{queue_id}/approve",
+        json={"reason": args.reason or "Approved via CLI"}
+    )
+    
+    if result.get("success"):
+        print(f"{GRN}✓{R} Approved execution {result.get('execution_id')}")
+        if args.run:
+            print(f"  Running now...")
+            cmd_node_run(argparse.Namespace(execution_id=result.get("execution_id")))
+    else:
+        print(f"{RED}✗{R} {result.get('message')}")
+
+
+def cmd_node_reject(args):
+    """Reject a pending execution."""
+    queue_id = args.queue_id
+    
+    result = api_request(
+        "POST",
+        f"/node-executions/approvals/{queue_id}/reject",
+        json={"reason": args.reason or "Rejected via CLI"}
+    )
+    
+    if result.get("success"):
+        print(f"{GRN}✓{R} Rejected execution {result.get('execution_id')}")
+    else:
+        print(f"{RED}✗{R} {result.get('message')}")
+
+
+def cmd_node_run(args):
+    """Run an approved execution."""
+    execution_id = args.execution_id
+    
+    print(f"Running execution {execution_id}...")
+    result = api_request("POST", f"/node-executions/{execution_id}/run")
+    
+    if result.get("success"):
+        print(f"{GRN}✓{R} Execution completed")
+        if result.get("stdout"):
+            print(f"\n{BOLD}Output:{R}")
+            print(result["stdout"])
+        if result.get("stderr"):
+            print(f"\n{RED}Stderr:{R}")
+            print(result["stderr"])
+    else:
+        print(f"{RED}✗{R} {result.get('message')}")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="prime",
+        description="Prime AI Agent Platform CLI"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    
+    # Auth commands
+    p_status = subparsers.add_parser("status", help="Show system status")
+    p_status.set_defaults(func=cmd_status)
+    
+    p_login = subparsers.add_parser("login", help="Authenticate")
+    p_login.set_defaults(func=cmd_login)
+    
+    p_logout = subparsers.add_parser("logout", help="Logout")
+    p_logout.set_defaults(func=cmd_logout)
+    
+    p_whoami = subparsers.add_parser("whoami", help="Show current user")
+    p_whoami.set_defaults(func=cmd_whoami)
+    
+    p_doctor = subparsers.add_parser("doctor", help="Run diagnostics")
+    p_doctor.set_defaults(func=cmd_doctor)
+    
+    # Node execution commands
+    p_node = subparsers.add_parser("node", help="Node execution commands")
+    node_sub = p_node.add_subparsers(dest="node_cmd", help="Node commands")
+    
+    # node execute
+    p_exec = node_sub.add_parser("execute", help="Execute a command")
+    p_exec.add_argument("command", help="Command to execute")
+    p_exec.add_argument("args", nargs="?", help="Command arguments")
+    p_exec.add_argument("--node", "-n", help="Node ID")
+    p_exec.add_argument("--connection", "-c", help="Connection ID")
+    p_exec.add_argument("--caps", help="Capabilities (comma-separated)")
+    p_exec.set_defaults(func=cmd_node_execute)
+    
+    # node approvals
+    p_approvals = node_sub.add_parser("approvals", help="List pending approvals")
+    p_approvals.set_defaults(func=cmd_node_approvals)
+    
+    # node approve
+    p_approve = node_sub.add_parser("approve", help="Approve execution")
+    p_approve.add_argument("queue_id", help="Queue item ID")
+    p_approve.add_argument("--reason", "-r", help="Approval reason")
+    p_approve.add_argument("--run", action="store_true", help="Run after approval")
+    p_approve.set_defaults(func=cmd_node_approve)
+    
+    # node reject
+    p_reject = node_sub.add_parser("reject", help="Reject execution")
+    p_reject.add_argument("queue_id", help="Queue item ID")
+    p_reject.add_argument("--reason", "-r", help="Rejection reason")
+    p_reject.set_defaults(func=cmd_node_reject)
+    
+    # node run
+    p_run = node_sub.add_parser("run", help="Run approved execution")
+    p_run.add_argument("execution_id", help="Execution ID")
+    p_run.set_defaults(func=cmd_node_run)
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

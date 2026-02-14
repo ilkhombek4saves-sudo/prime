@@ -646,3 +646,124 @@ class WebhookBinding(Base):
 Index("ix_memories_user_id", Memory.user_id, Memory.created_at)
 Index("ix_cron_jobs_active", CronJob.active, CronJob.next_run)
 Index("ix_webhook_bindings_path", WebhookBinding.path)
+
+
+# ── OpenClaw-style Node Execution & Approval models ───────────────────────────
+
+
+class ExecutionStatus(str, enum.Enum):
+    pending = "pending"
+    pending_approval = "pending_approval"
+    approved = "approved"
+    rejected = "rejected"
+    in_progress = "in_progress"
+    completed = "completed"
+    failed = "failed"
+    canceled = "canceled"
+
+
+class NodeExecution(Base):
+    """Execution request from a node (like Claude Code or sandboxed agent).
+    
+    Similar to OpenClaw's node execution flow where commands can require
+    operator approval before running.
+    """
+    
+    __tablename__ = "node_executions"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Who requested execution
+    connection_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    node_name: Mapped[str] = mapped_column(String(128), default="unknown")
+    
+    # What to execute
+    command: Mapped[str] = mapped_column(String(128), nullable=False)
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    
+    # Execution context
+    working_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
+    env_vars: Mapped[dict] = mapped_column(JSON, default=dict)
+    
+    # Status and approval
+    status: Mapped[ExecutionStatus] = mapped_column(Enum(ExecutionStatus), default=ExecutionStatus.pending)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=True)
+    
+    # Approval details
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    approval_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Execution results
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stdout: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stderr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Error tracking
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Idempotency
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    
+    # Relationships
+    approver: Mapped["User"] = relationship("User", foreign_keys=[approved_by])
+
+
+class NodeApprovalQueue(Base):
+    """Queue of execution requests pending operator approval.
+    
+    This enables OpenClaw-style workflow where node executions
+    (like bash commands from Claude Code) can be queued for
+    operator review before running.
+    """
+    
+    __tablename__ = "node_approval_queue"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Link to execution
+    execution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("node_executions.id"), nullable=False)
+    
+    # Requester info
+    connection_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    node_name: Mapped[str] = mapped_column(String(128), default="unknown")
+    
+    # What is being requested
+    command: Mapped[str] = mapped_column(String(128), nullable=False)
+    params_summary: Mapped[str] = mapped_column(Text, default="")
+    risk_level: Mapped[str] = mapped_column(String(32), default="medium")  # low, medium, high, critical
+    
+    # Queue status
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, approved, rejected, expired
+    
+    # Expiration
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    
+    # Resolution
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Auto-approval rules that were checked
+    auto_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_approval_rule: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    
+    # Relationships
+    execution: Mapped["NodeExecution"] = relationship("NodeExecution")
+    resolver: Mapped["User"] = relationship("User", foreign_keys=[resolved_by])
+
+
+Index("ix_node_executions_status", NodeExecution.status, NodeExecution.created_at)
+Index("ix_node_executions_connection", NodeExecution.connection_id, NodeExecution.created_at)
+Index("ix_node_approval_queue_status", NodeApprovalQueue.status, NodeApprovalQueue.created_at)
+Index("ix_node_approval_queue_expires", NodeApprovalQueue.expires_at, NodeApprovalQueue.status)

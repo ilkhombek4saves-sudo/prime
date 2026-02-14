@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+Prime — Unified CLI for Docker-based deployment
+Simple wrapper around docker compose
+"""
+
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+# Find prime directory
+PRIME_DIR = Path(os.getenv("PRIME_HOME", Path.home() / "prime"))
+if not (PRIME_DIR / "docker-compose.yml").exists():
+    # Try current directory
+    if (Path.cwd() / "docker-compose.yml").exists():
+        PRIME_DIR = Path.cwd()
+    else:
+        print("Error: Prime not found. Run install.sh first")
+        sys.exit(1)
+
+# Colors
+R, BOLD = "\033[0m", "\033[1m"
+GRN, YLW, BLU, RED = "\033[92m", "\033[93m", "\033[94m", "\033[91m"
+
+def run(args):
+    """Run docker compose command."""
+    cmd = ["docker", "compose"] + args
+    result = subprocess.run(cmd, cwd=PRIME_DIR)
+    return result.returncode
+
+def status():
+    """Show status."""
+    import httpx
+    try:
+        r = httpx.get("http://localhost:8000/api/healthz", timeout=3).json()
+        db = f"{GRN}✓{R}" if r.get("db") else f"{RED}✗{R}"
+        print(f"\n{BOLD}Prime Status{R}")
+        print(f"  {GRN}✓{R} API: http://localhost:8000")
+        print(f"  {db} Database")
+        print(f"  Mode: Docker")
+        
+        # Try to get user info
+        try:
+            from pathlib import Path
+            import json
+            config = Path.home() / ".config" / "prime" / "config.json"
+            if config.exists():
+                token = json.loads(config.read_text()).get("token")
+                if token:
+                    me = httpx.get("http://localhost:8000/api/auth/me", 
+                                   headers={"Authorization": f"Bearer {token}"}, timeout=3).json()
+                    print(f"\n  User: {me.get('username')} ({me.get('role')})")
+        except:
+            pass
+        print()
+    except:
+        print(f"\n  {RED}✗{R} Prime is offline")
+        print(f"  Run: prime up\n")
+
+def logs():
+    """Show logs."""
+    run(["logs", "-f"])
+
+def doctor():
+    """Run diagnostics."""
+    import httpx
+    try:
+        r = httpx.get("http://localhost:8000/api/doctor", timeout=10).json()
+        print(f"\n{BOLD}Diagnostics{R}\n")
+        for c in r.get("checks", []):
+            s = f"{GRN}✓{R}" if c["ok"] else f"{RED}✗{R}"
+            print(f"  {s} {c['label']}: {c['detail']}")
+        print(f"\nPassed: {r.get('passed')}/{r.get('total')}\n")
+    except Exception as e:
+        print(f"{RED}Error:{R} {e}")
+        print("Is Prime running? Try: prime up")
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"\n{BOLD}Prime AI Agent{R}\n")
+        print("Usage: prime <command>")
+        print("\nCommands:")
+        print("  up         Start services")
+        print("  down       Stop services")
+        print("  status     Check health")
+        print("  logs       View logs")
+        print("  doctor     Run diagnostics")
+        print("  ps         List containers")
+        print("  exec       Execute command in container")
+        print("\nAny docker compose command works too:")
+        print("  prime build")
+        print("  prime restart backend")
+        print()
+        return
+    
+    cmd = sys.argv[1]
+    args = sys.argv[2:]
+    
+    # Built-in commands
+    if cmd == "status":
+        status()
+    elif cmd == "doctor":
+        doctor()
+    elif cmd == "logs":
+        logs()
+    elif cmd in ["up", "down", "ps", "build", "restart", "stop", "start", "exec"]:
+        run([cmd] + args)
+    else:
+        # Pass through to docker compose
+        run(sys.argv[1:])
+
+if __name__ == "__main__":
+    main()
