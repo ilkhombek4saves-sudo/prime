@@ -364,13 +364,19 @@ create_cli() {
     fi
     
     # Create wrapper script that calls Python CLI
-    cat > "$BIN_DIR/prime" << EOF
+    # Remove old prime if exists (to avoid permission issues)
+    rm -f "$BIN_DIR/prime"
+    
+    # Create the wrapper script
+    cat > "$BIN_DIR/prime" << 'EOF'
 #!/bin/bash
-export PRIME_HOME="$PRIME_DIR"
-export PYTHONPATH="$PRIME_DIR/cli:$PYTHONPATH"
-exec python3 "$PRIME_DIR/cli/prime.py" "\$@"
+export PRIME_HOME="PRIME_DIR_PLACEHOLDER"
+export PYTHONPATH="PRIME_DIR_PLACEHOLDER/cli:${PYTHONPATH:-}"
+exec python3 "PRIME_DIR_PLACEHOLDER/cli/prime.py" "$@"
 EOF
-    chmod +x "$BIN_DIR/prime"
+    # Replace placeholder with actual path
+    sed -i "s|PRIME_DIR_PLACEHOLDER|$PRIME_DIR|g" "$BIN_DIR/prime"
+    chmod 755 "$BIN_DIR/prime"
     
     # Verify installation
     if [[ -x "$BIN_DIR/prime" ]]; then
