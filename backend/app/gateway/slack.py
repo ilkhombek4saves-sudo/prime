@@ -167,7 +167,7 @@ class SlackGateway:
 
         try:
             payload = json.loads(body)
-        except Exception:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {"error": "invalid_json"}
 
         # URL verification challenge

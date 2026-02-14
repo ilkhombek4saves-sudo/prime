@@ -477,6 +477,10 @@ class DocumentChunk(Base):
     document = relationship("Document", back_populates="chunks")
 
 
+Index("ix_bots_token", Bot.token)
+Index("ix_bots_active", Bot.active)
+Index("ix_sessions_user_status", Session.user_id, Session.status)
+Index("ix_sessions_agent_status", Session.agent_id, Session.status)
 Index("ix_tasks_status_created_at", Task.status, Task.created_at)
 Index("ix_messages_session_created_at", Message.session_id, Message.created_at)
 Index("ix_sessions_bot_status", Session.bot_id, Session.status)

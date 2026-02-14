@@ -92,7 +92,7 @@ class WhatsAppGateway:
 
         try:
             payload = json.loads(body)
-        except Exception:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {"error": "invalid_json"}
 
         for entry in payload.get("entry", []):
@@ -184,8 +184,8 @@ class WhatsAppGateway:
                     "message_id": message_id,
                 },
             )
-        except Exception:
-            pass
+        except (httpx.HTTPError, OSError) as exc:
+            logger.debug("Failed to mark WhatsApp message as read: %s", exc)
 
     async def send_interactive_buttons(
         self, to: str, body: str, buttons: list[dict]

@@ -174,6 +174,6 @@ class WebChatGateway(GatewayAdapter):
         for ws in list(_active_ws.values()):
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error closing WebChat WS: %s", exc)
         _active_ws.clear()

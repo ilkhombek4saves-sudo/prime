@@ -195,8 +195,10 @@ collect_user_input() {
 # Prime Configuration
 SECRET_KEY=$SECRET
 JWT_SECRET=$JWT
+DB_NAME=prime
 DB_USER=prime
 DB_PASSWORD=$DBPASS
+DATABASE_URL=postgresql+psycopg://prime:$DBPASS@db:5432/prime
 DOMAIN=localhost
 EMAIL=admin@localhost
 WORKERS=4
@@ -254,16 +256,56 @@ cleanup_existing() {
     ok "Очищено"
 }
 
+wait_for_db() {
+    log "Ожидание готовности PostgreSQL..."
+    local attempts=0
+    while ! docker compose exec -T db pg_isready -U prime 2>/dev/null | grep -q "accepting connections"; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 30 ]]; then
+            error "PostgreSQL не запустился за 30 секунд"
+            echo "Проверь логи: docker compose logs db"
+            exit 1
+        fi
+        echo -n "."
+        sleep 1
+    done
+    echo
+    ok "PostgreSQL готов"
+}
+
+run_migrations() {
+    log "Применение миграций базы данных..."
+    if docker compose exec -T backend alembic upgrade head 2>&1; then
+        ok "Миграции применены"
+    else
+        error "Не удалось применить миграции"
+        echo "Проверь логи: docker compose logs backend"
+        exit 1
+    fi
+}
+
 start_prime() {
     step "5/6 Запуск Prime"
     
     cleanup_existing
     
-    log "Сборка и запуск контейнеров..."
+    log "Запуск PostgreSQL..."
+    docker compose up -d db
+    
+    # Ждём пока БД будет готова
+    wait_for_db
+    
+    log "Запуск остальных сервисов..."
     docker compose up -d --build 2>&1 | tail -5
     
-    # Ждём готовности
-    log "Ожидание запуска..."
+    # Ждём пока backend стартует
+    sleep 3
+    
+    # Применяем миграции
+    run_migrations
+    
+    # Ждём готовности API
+    log "Ожидание API..."
     local attempts=0
     while ! curl -sf http://localhost:8000/api/healthz &>/dev/null; do
         attempts=$((attempts + 1))

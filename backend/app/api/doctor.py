@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
@@ -109,7 +110,7 @@ def _run_checks(quick: bool = False) -> list[dict]:
         r = httpx.get("http://localhost:3001/health", timeout=1.5)
         browser_ok = r.status_code == 200
         browser_detail = "Running on :3001" if browser_ok else f"HTTP {r.status_code}"
-    except Exception:
+    except (httpx.HTTPError, OSError):
         browser_detail = "Not running (optional)"
     results.append(_check(
         "browser_bridge",
@@ -195,4 +196,55 @@ def run_doctor_quick(current_user: User = Depends(get_current_user)):
         "total": len(checks),
         "healthy": all(c["ok"] for c in checks),
         "checks": checks,
+    }
+
+
+@router.post("/repair")
+def run_repair(current_user: User = Depends(get_current_user)):
+    """Attempt auto-repair for known issues."""
+    repaired = []
+
+    # 1 — Ensure config directory exists
+    config_dir = Path("config")
+    if not config_dir.exists():
+        config_dir.mkdir(parents=True, exist_ok=True)
+        repaired.append("Created config/ directory")
+
+    # 2 — Ensure workspace directory exists
+    from app.config.settings import get_settings
+    s = get_settings()
+    workspace = getattr(s, "workspace_root", "/tmp/prime-workspace")
+    if workspace and not os.path.exists(workspace):
+        os.makedirs(workspace, exist_ok=True)
+        repaired.append(f"Created workspace directory: {workspace}")
+
+    # 3 — Run migrations if possible
+    try:
+        from app.persistence.database import engine
+        import sqlalchemy
+        with engine.connect() as conn:
+            conn.execute(sqlalchemy.text("SELECT 1"))
+        # DB is up — try alembic
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            repaired.append("Ran alembic migrations")
+        else:
+            repaired.append(f"Migration attempt: {result.stderr[:200]}")
+    except Exception as exc:
+        repaired.append(f"Migration skipped: {exc}")
+
+    # 4 — Validate config
+    try:
+        from app.services.config_loader import ConfigLoader
+        ConfigLoader().load_and_validate()
+        repaired.append("Config validation passed")
+    except Exception as exc:
+        repaired.append(f"Config validation: {exc}")
+
+    return {
+        "repaired": len(repaired),
+        "actions": repaired,
     }

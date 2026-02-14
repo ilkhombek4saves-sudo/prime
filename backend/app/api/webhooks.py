@@ -105,7 +105,7 @@ async def receive_webhook(path: str, request: Request):
 
     try:
         payload = await request.json()
-    except Exception:
+    except (ValueError, UnicodeDecodeError):
         payload = {}
 
     headers = dict(request.headers)

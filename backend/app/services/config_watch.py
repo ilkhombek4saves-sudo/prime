@@ -56,6 +56,18 @@ class ConfigWatcher:
                     continue
                 ConfigLoader().load_and_validate()
                 sync_config_to_db()
+
+                # Publish event for connected WS clients
+                try:
+                    from app.services.event_bus import get_event_bus
+                    from app.services.config_service import config_hash
+                    get_event_bus().publish_nowait("config.reloaded", {
+                        "hash": config_hash(str(self._path)),
+                        "mode": settings.config_reload_mode,
+                    })
+                except Exception:
+                    pass
+
                 if settings.config_reload_mode == "hybrid":
                     logger.info("Config reload applied (hybrid): restart recommended")
                 else:

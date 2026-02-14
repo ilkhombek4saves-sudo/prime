@@ -20,6 +20,7 @@ import AgentsPage from "../pages/AgentsPage";
 import BindingsPage from "../pages/BindingsPage";
 import GlobalSearch from "../components/GlobalSearch";
 import ErrorBoundary from "../components/ErrorBoundary";
+import RequireRole from "../components/RequireRole";
 import { useColorMode } from "../styles/theme";
 import { WsProvider, useWsStatus } from "../services/wsContext";
 import { destroyGatewayWS } from "../services/ws";
@@ -113,11 +114,11 @@ function AuthenticatedApp() {
             <Route path="/plugins" element={<PluginsPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/tasks" element={<TasksPage />} />
-            <Route path="/users" element={<UsersPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/users" element={<RequireRole roles={["admin"]}><UsersPage /></RequireRole>} />
+            <Route path="/settings" element={<RequireRole roles={["admin"]}><SettingsPage /></RequireRole>} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/knowledge-bases" element={<KnowledgeBasePage />} />
-            <Route path="/organizations" element={<OrganizationsPage />} />
+            <Route path="/organizations" element={<RequireRole roles={["admin"]}><OrganizationsPage /></RequireRole>} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/bindings" element={<BindingsPage />} />
           </Routes>

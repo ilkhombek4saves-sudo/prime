@@ -50,8 +50,8 @@ class DiscordGateway(GatewayAdapter):
         for client in self._clients:
             try:
                 await client.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error closing Discord client: %s", exc)
         logger.info("Discord gateway stopped")
 
 

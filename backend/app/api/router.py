@@ -28,6 +28,7 @@ from app.api.skills import router as skills_router
 from app.api.tailscale import router as tailscale_router
 from app.api.doctor import router as doctor_router
 from app.api.security import router as security_router
+from app.api.config_rpc import router as config_rpc_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -57,3 +58,4 @@ api_router.include_router(doctor_router)
 api_router.include_router(security_router)
 api_router.include_router(node_executions.router)
 api_router.include_router(onboard.router)
+api_router.include_router(config_rpc_router)
