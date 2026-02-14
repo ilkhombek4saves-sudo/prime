@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Prime Local Installer
-# Запускает Prime из текущей директории (без скачивания)
-# Usage: ./install.sh
+# Prime Installer - Fully Automated
+# Запускает Prime полностью автоматически
+# Usage: curl -fsSL .../install.sh | bash
 
 set -euo pipefail
 
@@ -16,119 +16,181 @@ log() { echo -e "${BLU}→${RST} $1"; }
 ok() { echo -e "${GRN}✓${RST} $1"; }
 warn() { echo -e "${YLW}!${RST} $1"; }
 error() { echo -e "${RED}✗${RST} $1" >&2; }
+step() { echo; echo -e "${BLU}═══════════════════════════════════════════════════${RST}"; echo -e "${BOLD}  $1${RST}"; echo -e "${BLU}═══════════════════════════════════════════════════${RST}"; }
 
 banner() {
     echo
     echo -e "${BOLD}${BLU}╔════════════════════════════════════════════╗${RST}"
-    echo -e "${BOLD}${BLU}║${RST}        ${BOLD}PRIME LOCAL INSTALLER${RST}            ${BLU}║${RST}"
+    echo -e "${BOLD}${BLU}║${RST}        ${BOLD}PRIME INSTALLER${RST}                  ${BLU}║${RST}"
+    echo -e "${BOLD}${BLU}║${RST}     Полностью автоматическая установка    ${BLU}║${RST}"
     echo -e "${BOLD}${BLU}╚════════════════════════════════════════════╝${RST}"
     echo
 }
 
-# Проверяем что мы в директории проекта
-check_project() {
-    if [[ ! -f "docker-compose.yml" ]]; then
-        error "Не найден docker-compose.yml"
-        echo "Запусти install.sh из директории проекта Prime"
+# ═══════════════════════════════════════════════════
+# 1. СИСТЕМНЫЕ ПРОВЕРКИ И УСТАНОВКА
+# ═══════════════════════════════════════════════════
+
+check_system() {
+    step "1/6 Проверка системы"
+    
+    # Проверка архитектуры
+    ARCH=$(uname -m)
+    if [[ "$ARCH" != "x86_64" && "$ARCH" != "aarch64" && "$ARCH" != "arm64" ]]; then
+        error "Неподдерживаемая архитектура: $ARCH"
         exit 1
     fi
-    ok "Проект найден: $(pwd)"
+    ok "Архитектура: $ARCH"
+    
+    # Проверка свободного места (минимум 5GB)
+    FREE_GB=$(df -BG . 2>/dev/null | awk 'NR==2 {print $4}' | tr -d 'G' || echo "0")
+    if [[ "$FREE_GB" -lt 5 ]]; then
+        error "Недостаточно места на диске. Требуется минимум 5GB, доступно: ${FREE_GB}GB"
+        exit 1
+    fi
+    ok "Диск: ${FREE_GB}GB доступно"
+    
+    # Проверка RAM (минимум 2GB)
+    TOTAL_RAM=$(free -m 2>/dev/null | awk 'NR==2{print $2}' || echo "0")
+    if [[ "$TOTAL_RAM" -lt 2048 ]]; then
+        warn "Мало RAM: ${TOTAL_RAM}MB. Рекомендуется минимум 2GB"
+    else
+        ok "RAM: ${TOTAL_RAM}MB"
+    fi
 }
 
-check_docker() {
-    log "Проверка Docker..."
+install_docker() {
+    step "2/6 Установка Docker"
     
-    if ! command -v docker &>/dev/null; then
-        error "Docker не установлен"
-        echo "Установи: curl -fsSL https://get.docker.com | sh"
-        exit 1
+    if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        ok "Docker уже установлен"
+        return 0
     fi
     
-    if ! docker info &>/dev/null; then
-        error "Docker daemon не запущен"
-        exit 1
+    log "Устанавливаем Docker..."
+    
+    # Установка Docker
+    curl -fsSL https://get.docker.com | sh
+    
+    # Запуск сервиса
+    if command -v systemctl &>/dev/null; then
+        systemctl enable docker
+        systemctl start docker
     fi
     
-    if ! docker compose version &>/dev/null; then
-        error "Docker Compose v2 не найден"
-        exit 1
+    # Добавляем пользователя в группу docker
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        usermod -aG docker "$SUDO_USER" 2>/dev/null || true
     fi
     
-    ok "Docker OK"
+    ok "Docker установлен"
 }
 
-setup_env() {
-    if [[ -f ".env" ]]; then
-        warn ".env уже существует"
-        read -p "Пересоздать? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            ok "Используем существующий .env"
-            return
+verify_docker() {
+    log "Проверка Docker daemon..."
+    
+    local attempts=0
+    while ! docker info &>/dev/null; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 30 ]]; then
+            error "Docker daemon не запустился"
+            exit 1
         fi
+        echo -n "."
+        sleep 1
+    done
+    echo
+    
+    ok "Docker daemon работает"
+}
+
+# ═══════════════════════════════════════════════════
+# 2. ЗАГРУЗКА ПРОЕКТА
+# ═══════════════════════════════════════════════════
+
+download_prime() {
+    step "3/6 Загрузка Prime"
+    
+    # Если мы уже в директории проекта
+    if [[ -f "docker-compose.yml" ]] && [[ -d "backend" ]]; then
+        ok "Используем текущую директорию: $(pwd)"
+        return 0
     fi
     
-    log "Создание конфигурации..."
+    # Ищем существующую установку
+    if [[ -d "${HOME}/prime" ]] && [[ -f "${HOME}/prime/docker-compose.yml" ]]; then
+        cd "${HOME}/prime"
+        ok "Найдена существующая установка: ${HOME}/prime"
+        return 0
+    fi
     
-    # Генерируем секреты
+    # Клонируем репозиторий
+    log "Клонирование репозитория..."
+    cd "${HOME}"
+    
+    if [[ -d "prime" ]]; then
+        rm -rf prime.bak
+        mv prime prime.bak
+    fi
+    
+    git clone --depth 1 https://github.com/ilkhombek4saves-sudo/prime.git 2>/dev/null || {
+        error "Не удалось клонировать репозиторий"
+        exit 1
+    }
+    
+    cd prime
+    ok "Prime загружен в: $(pwd)"
+}
+
+# ═══════════════════════════════════════════════════
+# 3. КОНФИГУРАЦИЯ
+# ═══════════════════════════════════════════════════
+
+collect_user_input() {
+    step "4/6 Настройка"
+    
+    # Генерируем секреты автоматически
     SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
     JWT=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
     DBPASS=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
     
-    # Собираем API ключи
-    echo
-    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-    echo -e "${BOLD}       AI ПРОВАЙДЕРЫ (опционально)${RST}"
-    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-    echo "Нажми Enter чтобы пропустить, или введи ключ"
+    echo -e "${BLU}┌─────────────────────────────────────────────────┐${RST}"
+    echo -e "${BLU}│${RST}  ${BOLD}ВВЕДИ API КЛЮЧИ (Enter = пропустить)${RST}        ${BLU}│${RST}"
+    echo -e "${BLU}└─────────────────────────────────────────────────┘${RST}"
     echo
     
-    # OpenAI / ChatGPT
-    read -p "1. OpenAI API Key [sk-...]: " OPENAI_KEY
-    
-    # Google Gemini  
-    read -p "2. Google Gemini API Key [AI...]: " GEMINI_KEY
-    
-    # Mistral
-    read -p "3. Mistral API Key [...]: " MISTRAL_KEY
-    
-    # DeepSeek
-    read -p "4. DeepSeek API Key [...]: " DEEPSEEK_KEY
-    
-    # Qwen (Alibaba)
-    read -p "5. Qwen API Key [...]: " QWEN_KEY
-    
-    # Kimi (Moonshot)
-    read -p "6. Kimi API Key [...]: " KIMI_KEY
-    
-    # ZAI
-    read -p "7. ZAI API Key [...]: " ZAI_KEY
+    # AI провайдеры
+    read -p "OpenAI (GPT-4/3.5)      [sk-...]          : " OPENAI_KEY
+    read -p "Google Gemini           [AI...]           : " GEMINI_KEY
+    read -p "Mistral                 [...]             : " MISTRAL_KEY
+    read -p "DeepSeek                [...]             : " DEEPSEEK_KEY
+    read -p "Qwen (Alibaba)          [...]             : " QWEN_KEY
+    read -p "Kimi (Moonshot)         [...]             : " KIMI_KEY
+    read -p "ZAI                     [...]             : " ZAI_KEY
     
     echo
-    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-    echo -e "${BOLD}       КАНАЛЫ СВЯЗИ (опционально)${RST}"
-    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    echo -e "${BLU}┌─────────────────────────────────────────────────┐${RST}"
+    echo -e "${BLU}│${RST}  ${BOLD}КАНАЛЫ СВЯЗИ${RST}                                  ${BLU}│${RST}"
+    echo -e "${BLU}└─────────────────────────────────────────────────┘${RST}"
     
-    # Telegram
-    read -p "8. Telegram Bot Token [...]: " TELEGRAM_TOKEN
-    
-    # Discord
-    read -p "9. Discord Bot Token [...]: " DISCORD_TOKEN
+    read -p "Telegram Bot            [...]             : " TELEGRAM_TOKEN
+    read -p "Discord Bot             [...]             : " DISCORD_TOKEN
     
     echo
+    echo -e "${BLU}┌─────────────────────────────────────────────────┐${RST}"
+    echo -e "${BLU}│${RST}  ${BOLD}АДМИНИСТРАТОР${RST}                                ${BLU}│${RST}"
+    echo -e "${BLU}└─────────────────────────────────────────────────┘${RST}"
     
-    # Дополнительные настройки
-    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-    echo -e "${BOLD}       ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ${RST}"
-    echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
+    read -p "Username                [admin]           : " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
     
-    read -p "Лимит токенов на запрос [4000]: " TOKEN_LIMIT
-    TOKEN_LIMIT=${TOKEN_LIMIT:-4000}
+    AUTO_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | cut -c1-16)
+    read -p "Password                [авто: $AUTO_PASSWORD] : " ADMIN_PASS
+    ADMIN_PASS=${ADMIN_PASS:-$AUTO_PASSWORD}
     
-    read -p "Уровень логирования [info]: " LOG_LEVEL_INPUT
-    LOG_LEVEL_INPUT=${LOG_LEVEL_INPUT:-info}
+    # Создаём .env
+    log "Создание конфигурации..."
     
-    # Формируем .env
     cat > .env << EOF
 # Prime Configuration
 SECRET_KEY=$SECRET
@@ -138,9 +200,9 @@ DB_PASSWORD=$DBPASS
 DOMAIN=localhost
 EMAIL=admin@localhost
 WORKERS=4
-LOG_LEVEL=$LOG_LEVEL_INPUT
+LOG_LEVEL=info
 METRICS_ENABLED=true
-TOKEN_LIMIT=$TOKEN_LIMIT
+TOKEN_LIMIT=4000
 
 # AI Provider API Keys
 $(if [[ -n "$OPENAI_KEY" ]]; then echo "OPENAI_API_KEY=$OPENAI_KEY"; else echo "# OPENAI_API_KEY=sk-..."; fi)
@@ -157,36 +219,134 @@ $(if [[ -n "$DISCORD_TOKEN" ]]; then echo "DISCORD_BOT_TOKEN=$DISCORD_TOKEN"; el
 EOF
     
     chmod 600 .env
-    ok "Создан .env с секретами"
     
-    # Показываем что настроено
+    # Сохраняем admin credentials
+    cat > .admin_credentials << EOF
+# Prime Admin Credentials
+# Смени пароль сразу после первого входа!
+
+Username: $ADMIN_USER
+Password: $ADMIN_PASS
+EOF
+    chmod 600 .admin_credentials
+    
+    ok "Конфигурация создана"
+}
+
+# ═══════════════════════════════════════════════════
+# 4. ЗАПУСК
+# ═══════════════════════════════════════════════════
+
+cleanup_existing() {
+    log "Очистка старых контейнеров..."
+    
+    # Останавливаем и удаляем
+    docker compose down -v --remove-orphans 2>/dev/null || true
+    docker rm -f $(docker ps -aq --filter name=prime 2>/dev/null) 2>/dev/null || true
+    
+    # Освобождаем порт 5432
+    local pid=$(ss -tlnp 2>/dev/null | grep ':5432 ' | grep -oP 'pid=\K[0-9]+' || true)
+    if [[ -n "$pid" ]]; then
+        kill $pid 2>/dev/null || true
+        sleep 2
+    fi
+    
+    ok "Очищено"
+}
+
+start_prime() {
+    step "5/6 Запуск Prime"
+    
+    cleanup_existing
+    
+    log "Сборка и запуск контейнеров..."
+    docker compose up -d --build 2>&1 | tail -5
+    
+    # Ждём готовности
+    log "Ожидание запуска..."
+    local attempts=0
+    while ! curl -sf http://localhost:8000/api/healthz &>/dev/null; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 60 ]]; then
+            error "Prime не запустился за 60 секунд"
+            echo "Проверь логи: docker compose logs"
+            exit 1
+        fi
+        echo -n "."
+        sleep 1
+    done
     echo
-    echo -e "${GRN}Настроено AI провайдеров:${RST}"
-    [[ -n "$OPENAI_KEY" ]] && echo "  ✓ OpenAI (GPT-4, GPT-3.5)"
-    [[ -n "$GEMINI_KEY" ]] && echo "  ✓ Google Gemini"
-    [[ -n "$MISTRAL_KEY" ]] && echo "  ✓ Mistral"
-    [[ -n "$DEEPSEEK_KEY" ]] && echo "  ✓ DeepSeek"
-    [[ -n "$QWEN_KEY" ]] && echo "  ✓ Qwen (Alibaba)"
-    [[ -n "$KIMI_KEY" ]] && echo "  ✓ Kimi (Moonshot)"
-    [[ -n "$ZAI_KEY" ]] && echo "  ✓ ZAI"
-    [[ -z "$OPENAI_KEY$GEMINI_KEY$MISTRAL_KEY$DEEPSEEK_KEY$QWEN_KEY$KIMI_KEY$ZAI_KEY" ]] && echo "  (нет AI провайдеров, можно добавить позже в .env)"
     
-    echo -e "${GRN}Настроено каналов:${RST}"
-    [[ -n "$TELEGRAM_TOKEN" ]] && echo "  ✓ Telegram"
-    [[ -n "$DISCORD_TOKEN" ]] && echo "  ✓ Discord"
-    [[ -z "$TELEGRAM_TOKEN$DISCORD_TOKEN" ]] && echo "  (нет каналов, можно добавить позже)"
+    ok "Prime запущен!"
+}
+
+# ═══════════════════════════════════════════════════
+# 5. НАСТРОЙКА (ONBOARD)
+# ═══════════════════════════════════════════════════
+
+run_onboard() {
+    step "6/6 Создание администратора"
+    
+    # Читаем сохранённые credentials
+    local ADMIN_USER=$(grep "Username:" .admin_credentials | cut -d' ' -f2)
+    local ADMIN_PASS=$(grep "Password:" .admin_credentials | cut -d' ' -f2)
+    
+    # Ждём API
+    sleep 2
+    
+    log "Создание администратора..."
+    local result=$(curl -sf -X POST http://localhost:8000/api/onboard \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" 2>/dev/null || true)
+    
+    if [[ -n "$result" ]]; then
+        ok "Администратор создан"
+    else
+        warn "Не удалось создать администратора через API"
+    fi
+}
+
+# ═══════════════════════════════════════════════════
+# 6. ФИНАЛ
+# ═══════════════════════════════════════════════════
+
+print_success() {
+    # Читаем credentials
+    local ADMIN_USER=$(grep "Username:" .admin_credentials 2>/dev/null | cut -d' ' -f2 || echo "admin")
+    local ADMIN_PASS=$(grep "Password:" .admin_credentials 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+    
+    echo
+    echo -e "${GRN}╔════════════════════════════════════════════════════════════╗${RST}"
+    echo -e "${GRN}║${RST}              ${BOLD}✓ PRIME УСТАНОВЛЕН${RST}                         ${GRN}║${RST}"
+    echo -e "${GRN}╚════════════════════════════════════════════════════════════╝${RST}"
+    echo
+    echo -e "${BOLD}API:${RST} http://localhost:8000"
+    echo -e "${BOLD}Docs:${RST} http://localhost:8000/docs"
+    echo
+    echo -e "${YLW}╔════════════════════════════════════════════════════════════╗${RST}"
+    echo -e "${YLW}║${RST}  ${BOLD}ADMIN LOGIN${RST}                                              ${YLW}║${RST}"
+    echo -e "${YLW}╚════════════════════════════════════════════════════════════╝${RST}"
+    echo "  Username: ${BOLD}$ADMIN_USER${RST}"
+    echo "  Password: ${BOLD}$ADMIN_PASS${RST}"
+    echo
+    echo -e "${RED}⚠ Смени пароль после первого входа!${RST}"
+    echo
+    echo -e "${BLU}Команды:${RST}"
+    echo "  prime status     # Статус"
+    echo "  prime down       # Остановить"
+    echo "  prime logs       # Логи"
+    echo "  prime uninstall  # Удалить"
     echo
 }
 
 create_cli() {
-    BIN_DIR="${HOME}/.local/bin"
+    local BIN_DIR="${HOME}/.local/bin"
     mkdir -p "$BIN_DIR"
     
-    PRIME_DIR="$(pwd)"
+    local PRIME_DIR="$(pwd)"
     
     cat > "$BIN_DIR/prime" << EOF
 #!/bin/bash
-# Prime CLI
 export PRIME_HOME="$PRIME_DIR"
 cd "$PRIME_DIR"
 
@@ -197,7 +357,6 @@ case "\${1:-}" in
     up|start)
         docker compose up -d
         echo "✓ Prime started"
-        echo "API: http://localhost:8000"
         ;;
     down|stop)
         docker compose down
@@ -206,16 +365,8 @@ case "\${1:-}" in
     logs)
         docker compose logs -f
         ;;
-    doctor)
-        curl -s http://localhost:8000/api/doctor | python3 -m json.tool 2>/dev/null || echo "Prime is offline"
-        ;;
     uninstall)
-        if [[ -f "$PRIME_DIR/uninstall.sh" ]]; then
-            "$PRIME_DIR/uninstall.sh"
-        else
-            echo "uninstall.sh not found. Downloading..."
-            curl -fsSL https://raw.githubusercontent.com/ilkhombek4saves-sudo/prime/main/uninstall.sh | bash
-        fi
+        "$PRIME_DIR/uninstall.sh"
         ;;
     *)
         docker compose "\$@"
@@ -223,152 +374,39 @@ case "\${1:-}" in
 esac
 EOF
     chmod +x "$BIN_DIR/prime"
-    ok "CLI установлен: $BIN_DIR/prime"
     
-    # Добавляем в PATH если нужно
+    # Добавляем в PATH
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         echo "export PATH=\"$BIN_DIR:\$PATH\"" >> ~/.bashrc
         export PATH="$BIN_DIR:$PATH"
-        ok "Добавлено в PATH"
     fi
 }
 
-start_prime() {
-    log "Запуск Prime..."
-    
-    # ВСЕГДА останавливаем и удаляем старые контейнеры prime
-    if docker ps -a 2>/dev/null | grep -q "prime-"; then
-        warn "Удаляем старые контейнеры..."
-        docker compose down -v --remove-orphans 2>&1 | tail -2 || true
-        docker rm -f $(docker ps -aq --filter name=prime-) 2>/dev/null || true
-    fi
-    
-    # Принудительно освобождаем порт 5432
-    if ss -tlnp 2>/dev/null | grep -q ':5432 '; then
-        warn "Освобождаем порт 5432..."
-        # Убиваем процесс на порту 5432
-        kill $(ss -tlnp 2>/dev/null | grep ':5432 ' | grep -oP 'pid=\K[0-9]+') 2>/dev/null || true
-        sleep 2
-    fi
-    
-    # Запускаем
-    docker compose up -d 2>&1 | tail -3
-    
-    # Ждём готовности (макс 60 секунд)
-    log "Ожидание запуска (до 60 сек)..."
-    for i in {1..60}; do
-        if curl -sf http://localhost:8000/api/healthz &>/dev/null; then
-            ok "Prime запущен!"
-            return 0
-        fi
-        echo -n "."
-        sleep 1
-    done
-    
-    echo
-    warn "Prime запускается долго, проверь логи:"
-    echo "  prime logs"
-    return 1
-}
-
-run_onboard() {
-    log "Настройка администратора..."
-    
-    # Ждём пока API будет доступен
-    for i in {1..30}; do
-        if curl -sf http://localhost:8000/api/onboard/status &>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-    
-    # Проверяем нужен ли onboard
-    local status=$(curl -sf http://localhost:8000/api/onboard/status 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('onboard_required','false'))" 2>/dev/null || echo "false")
-    
-    if [[ "$status" == "True" || "$status" == "true" ]]; then
-        echo
-        echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-        echo -e "${BOLD}       СОЗДАНИЕ АДМИНИСТРАТОРА${RST}"
-        echo -e "${BLU}═══════════════════════════════════════════════════${RST}"
-        echo
-        
-        # Спрашиваем логин/пароль
-        read -p "Username [admin]: " ADMIN_USER
-        ADMIN_USER=${ADMIN_USER:-admin}
-        
-        # Генерируем случайный пароль
-        AUTO_PASSWORD=$(openssl rand -base64 16 | tr -d '=+/' | cut -c1-16)
-        read -p "Password [авто: $AUTO_PASSWORD]: " ADMIN_PASS
-        ADMIN_PASS=${ADMIN_PASS:-$AUTO_PASSWORD}
-        
-        log "Создаём администратора $ADMIN_USER..."
-        
-        local result=$(curl -sf -X POST http://localhost:8000/api/onboard \
-            -H "Content-Type: application/json" \
-            -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" 2>/dev/null)
-        
-        if [[ -n "$result" ]]; then
-            ok "Администратор создан!"
-            
-            # Сохраняем credentials в файл
-            cat > "$(pwd)/.admin_credentials" << EOF
-# Prime Admin Credentials
-# Смени пароль сразу после первого входа!
-
-Username: $ADMIN_USER
-Password: $ADMIN_PASS
-EOF
-            chmod 600 "$(pwd)/.admin_credentials"
-            
-            echo
-            echo -e "${YLW}╔════════════════════════════════════════════╗${RST}"
-            echo -e "${YLW}║${RST}         ${BOLD}ADMIN CREDENTIALS${RST}                ${YLW}║${RST}"
-            echo -e "${YLW}╚════════════════════════════════════════════╝${RST}"
-            echo
-            echo "  Username: ${BOLD}$ADMIN_USER${RST}"
-            echo "  Password: ${BOLD}$ADMIN_PASS${RST}"
-            echo
-            echo -e "${RED}⚠ СМЕНИ ПАРОЛЬ СРАЗУ ПОСЛЕ ПЕРВОГО ВХОДА!${RST}"
-            echo
-            echo "Сохранено в: $(pwd)/.admin_credentials"
-        else
-            error "Не удалось создать администратора"
-        fi
-    else
-        ok "Onboard уже выполнен"
-    fi
-}
-
-print_success() {
-    echo
-    echo -e "${BOLD}${GRN}╔════════════════════════════════════════════╗${RST}"
-    echo -e "${BOLD}${GRN}║${RST}         ${GRN}✓ PRIME ГОТОВ${RST}                    ${GRN}║${RST}"
-    echo -e "${BOLD}${GRN}╚════════════════════════════════════════════╝${RST}"
-    echo
-    echo "Команды:"
-    echo "  prime status     # Проверить статус"
-    echo "  prime up         # Запустить"
-    echo "  prime down       # Остановить"
-    echo "  prime logs       # Логи"
-    echo "  prime doctor     # Диагностика"
-    echo "  prime uninstall  # Полное удаление Prime"
-    echo
-    echo "API: http://localhost:8000/api"
-    echo "Docs: http://localhost:8000/docs"
-    echo
-    echo "Настройка: $(pwd)/.env"
-    echo
-}
+# ═══════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════
 
 main() {
-    banner
-    check_project
-    check_docker
-    setup_env
-    create_cli
-    if start_prime; then
-        run_onboard
+    # Проверяем root для Docker установки
+    if [[ $EUID -ne 0 ]]; then
+        # Пробуем без root если Docker уже есть
+        if ! command -v docker &>/dev/null; then
+            error "Требуется root для установки Docker"
+            echo "Запусти: curl -fsSL .../install.sh | sudo bash"
+            exit 1
+        fi
     fi
+    
+    banner
+    
+    check_system
+    install_docker
+    verify_docker
+    download_prime
+    collect_user_input
+    create_cli
+    start_prime
+    run_onboard
     print_success
 }
 
