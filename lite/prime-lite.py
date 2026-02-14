@@ -31,14 +31,29 @@ CACHE_DIR = Path.home() / ".cache" / "prime"
 MEMORY_DIR = Path.home() / ".prime" / "memory"
 
 # ─── Colors ─────────────────────────────────────────────────────────────────
-R = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RED = "\033[91m"
-GRN = "\033[92m"
-YLW = "\033[93m"
-BLU = "\033[94m"
-CYN = "\033[96m"
+import sys
+# Check if output is a terminal that supports colors
+if sys.stdout.isatty() and hasattr(sys.stdout, 'fileno'):
+    try:
+        import termios
+        # Terminal supports colors
+        R = "\033[0m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
+        RED = "\033[91m"
+        GRN = "\033[92m"
+        YLW = "\033[93m"
+        BLU = "\033[94m"
+        CYN = "\033[96m"
+        USE_COLORS = True
+    except ImportError:
+        USE_COLORS = False
+else:
+    USE_COLORS = False
+
+if not USE_COLORS:
+    # No colors - use plain text
+    R = BOLD = DIM = RED = GRN = YLW = BLU = CYN = ""
 
 
 def log(msg): print(f"  {BLU}\u2192{R} {msg}")
@@ -710,7 +725,7 @@ def pick_ollama_model():
 class AgentLoop:
     """Core agent: sends queries to LLM with tools, executes tool calls, loops."""
 
-    MAX_TURNS = 15
+    MAX_TURNS = 999
 
     def __init__(self, workspace=None, model=None, provider=None):
         self.workspace = Path(workspace or WORKSPACE).resolve()

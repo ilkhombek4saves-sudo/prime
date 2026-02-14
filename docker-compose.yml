@@ -31,6 +31,8 @@ services:
       - ./backend/tests:/app/tests
       - ./config:/app/config
       - ./scripts:/app/scripts
+      # Docker socket for sandbox execution (Phase 1 - sandbox service)
+      - /var/run/docker.sock:/var/run/docker.sock
 
   frontend:
     build:
@@ -88,7 +90,38 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  # ── Phase 2: Browser automation bridge (Playwright + Node.js) ────────────────
+  browser-bridge:
+    build:
+      context: ./browser
+    ports:
+      - "3001:3001"
+    environment:
+      - BROWSER_BRIDGE_PORT=3001
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ── Phase 3: Tailscale sidecar (optional — enable with: docker compose --profile tailscale up) ──
+  tailscale:
+    image: tailscale/tailscale:latest
+    profiles: [tailscale]
+    hostname: prime-agent
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    network_mode: host
+    restart: unless-stopped
+
 volumes:
   pg_data:
   caddy_data:
   caddy_config:
+  tailscale_state:

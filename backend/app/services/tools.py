@@ -591,6 +591,377 @@ TOOLS_ANTHROPIC.append(_BROWSER_SNAPSHOT_ANTHROPIC)
 TOOLS_ANTHROPIC.append(_BROWSER_CLICK_ANTHROPIC)
 TOOLS_ANTHROPIC.append(_BROWSER_TYPE_ANTHROPIC)
 
+# ── Additional browser tools ───────────────────────────────────────────────────
+
+_BROWSER_FILL_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "browser_fill",
+        "description": "Fill a form field with a value.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector for the field"},
+                "value": {"type": "string", "description": "Value to fill"},
+            },
+            "required": ["selector", "value"],
+        },
+    },
+}
+_BROWSER_FILL_ANTHROPIC = {
+    "name": "browser_fill",
+    "description": "Fill a form field with a value.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector for the field"},
+            "value": {"type": "string", "description": "Value to fill"},
+        },
+        "required": ["selector", "value"],
+    },
+}
+
+_BROWSER_SCROLL_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "browser_scroll",
+        "description": "Scroll the browser page.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "direction": {"type": "string", "description": "Scroll direction: up/down"},
+                "amount": {"type": "integer", "description": "Pixels to scroll"},
+            },
+            "required": [],
+        },
+    },
+}
+_BROWSER_SCROLL_ANTHROPIC = {
+    "name": "browser_scroll",
+    "description": "Scroll the browser page.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "direction": {"type": "string", "description": "Scroll direction: up/down"},
+            "amount": {"type": "integer", "description": "Pixels to scroll"},
+        },
+        "required": [],
+    },
+}
+
+_BROWSER_NAVIGATE_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "browser_navigate",
+        "description": "Navigate to a URL in the current browser session.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to navigate to"},
+            },
+            "required": ["url"],
+        },
+    },
+}
+_BROWSER_NAVIGATE_ANTHROPIC = {
+    "name": "browser_navigate",
+    "description": "Navigate to a URL in the current browser session.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL to navigate to"},
+        },
+        "required": ["url"],
+    },
+}
+
+_BROWSER_EXTRACT_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "browser_extract",
+        "description": "Extract text content from a page element by CSS selector.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector"},
+            },
+            "required": ["selector"],
+        },
+    },
+}
+_BROWSER_EXTRACT_ANTHROPIC = {
+    "name": "browser_extract",
+    "description": "Extract text content from a page element by CSS selector.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector"},
+        },
+        "required": ["selector"],
+    },
+}
+
+_BROWSER_CLOSE_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "browser_close",
+        "description": "Close the current browser session.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+_BROWSER_CLOSE_ANTHROPIC = {
+    "name": "browser_close",
+    "description": "Close the current browser session.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+TOOLS_OPENAI.append(_BROWSER_FILL_OPENAI)
+TOOLS_OPENAI.append(_BROWSER_SCROLL_OPENAI)
+TOOLS_OPENAI.append(_BROWSER_NAVIGATE_OPENAI)
+TOOLS_OPENAI.append(_BROWSER_EXTRACT_OPENAI)
+TOOLS_OPENAI.append(_BROWSER_CLOSE_OPENAI)
+TOOLS_ANTHROPIC.append(_BROWSER_FILL_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_BROWSER_SCROLL_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_BROWSER_NAVIGATE_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_BROWSER_EXTRACT_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_BROWSER_CLOSE_ANTHROPIC)
+
+# ── Memory store/forget tools ─────────────────────────────────────────────────
+
+_MEMORY_STORE_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "memory_store",
+        "description": "Store a new long-term memory entry.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Memory content to store"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags"},
+            },
+            "required": ["content"],
+        },
+    },
+}
+_MEMORY_STORE_ANTHROPIC = {
+    "name": "memory_store",
+    "description": "Store a new long-term memory entry.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "description": "Memory content to store"},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags"},
+        },
+        "required": ["content"],
+    },
+}
+
+_MEMORY_FORGET_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "memory_forget",
+        "description": "Delete a memory entry by its ID.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "UUID of the memory to delete"},
+            },
+            "required": ["memory_id"],
+        },
+    },
+}
+_MEMORY_FORGET_ANTHROPIC = {
+    "name": "memory_forget",
+    "description": "Delete a memory entry by its ID.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "string", "description": "UUID of the memory to delete"},
+        },
+        "required": ["memory_id"],
+    },
+}
+
+TOOLS_OPENAI.append(_MEMORY_STORE_OPENAI)
+TOOLS_OPENAI.append(_MEMORY_FORGET_OPENAI)
+TOOLS_ANTHROPIC.append(_MEMORY_STORE_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_MEMORY_FORGET_ANTHROPIC)
+
+# ── Cron management tools ─────────────────────────────────────────────────────
+
+_CRON_REMOVE_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "cron_remove",
+        "description": "Remove a scheduled cron job by name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Job name to remove"},
+            },
+            "required": ["name"],
+        },
+    },
+}
+_CRON_REMOVE_ANTHROPIC = {
+    "name": "cron_remove",
+    "description": "Remove a scheduled cron job by name.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Job name to remove"},
+        },
+        "required": ["name"],
+    },
+}
+
+_CRON_LIST_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "cron_list",
+        "description": "List all scheduled cron jobs.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+_CRON_LIST_ANTHROPIC = {
+    "name": "cron_list",
+    "description": "List all scheduled cron jobs.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+TOOLS_OPENAI.append(_CRON_REMOVE_OPENAI)
+TOOLS_OPENAI.append(_CRON_LIST_OPENAI)
+TOOLS_ANTHROPIC.append(_CRON_REMOVE_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_CRON_LIST_ANTHROPIC)
+
+# ── Webhook tools ─────────────────────────────────────────────────────────────
+
+_WEBHOOK_REGISTER_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "webhook_register",
+        "description": "Register an inbound webhook that triggers an agent.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Webhook name"},
+                "path": {"type": "string", "description": "URL path (e.g. /my-hook)"},
+                "message_template": {"type": "string", "description": "Message template with {{payload.field}} placeholders"},
+            },
+            "required": ["name", "path", "message_template"],
+        },
+    },
+}
+_WEBHOOK_REGISTER_ANTHROPIC = {
+    "name": "webhook_register",
+    "description": "Register an inbound webhook that triggers an agent.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Webhook name"},
+            "path": {"type": "string", "description": "URL path (e.g. /my-hook)"},
+            "message_template": {"type": "string", "description": "Message template with {{payload.field}} placeholders"},
+        },
+        "required": ["name", "path", "message_template"],
+    },
+}
+
+_WEBHOOK_LIST_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "webhook_list",
+        "description": "List all registered webhook bindings.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+_WEBHOOK_LIST_ANTHROPIC = {
+    "name": "webhook_list",
+    "description": "List all registered webhook bindings.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+TOOLS_OPENAI.append(_WEBHOOK_REGISTER_OPENAI)
+TOOLS_OPENAI.append(_WEBHOOK_LIST_OPENAI)
+TOOLS_ANTHROPIC.append(_WEBHOOK_REGISTER_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_WEBHOOK_LIST_ANTHROPIC)
+
+# ── Skills tools ──────────────────────────────────────────────────────────────
+
+_SKILL_LIST_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "skill_list",
+        "description": "List all registered skills.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+_SKILL_LIST_ANTHROPIC = {
+    "name": "skill_list",
+    "description": "List all registered skills.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_SKILL_INSTALL_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "skill_install",
+        "description": "Install a skill from a name or workspace path.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name_or_path": {"type": "string", "description": "Skill name or path"},
+            },
+            "required": ["name_or_path"],
+        },
+    },
+}
+_SKILL_INSTALL_ANTHROPIC = {
+    "name": "skill_install",
+    "description": "Install a skill from a name or workspace path.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name_or_path": {"type": "string", "description": "Skill name or path"},
+        },
+        "required": ["name_or_path"],
+    },
+}
+
+_SKILL_CREATE_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "skill_create",
+        "description": "Use Pi-agent to create a new skill from a description.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "What the skill should do"},
+                "name": {"type": "string", "description": "Skill name (snake_case)"},
+            },
+            "required": ["description", "name"],
+        },
+    },
+}
+_SKILL_CREATE_ANTHROPIC = {
+    "name": "skill_create",
+    "description": "Use Pi-agent to create a new skill from a description.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "description": {"type": "string", "description": "What the skill should do"},
+            "name": {"type": "string", "description": "Skill name (snake_case)"},
+        },
+        "required": ["description", "name"],
+    },
+}
+
+TOOLS_OPENAI.append(_SKILL_LIST_OPENAI)
+TOOLS_OPENAI.append(_SKILL_INSTALL_OPENAI)
+TOOLS_OPENAI.append(_SKILL_CREATE_OPENAI)
+TOOLS_ANTHROPIC.append(_SKILL_LIST_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_SKILL_INSTALL_ANTHROPIC)
+TOOLS_ANTHROPIC.append(_SKILL_CREATE_ANTHROPIC)
+
 
 def _web_fetch(url: str) -> str:
     import httpx
@@ -772,9 +1143,31 @@ def _browser_type(ref: str, text: str) -> str:
     return f"Browser type: Not implemented in Prime Lite."
 
 
-def execute_tool(name: str, arguments: dict, workspace: WorkspaceService) -> str:
-    """Dispatch a tool call to WorkspaceService and return a string result."""
+def execute_tool(
+    name: str,
+    arguments: dict,
+    workspace: WorkspaceService,
+    *,
+    session_id: str | None = None,
+    agent_id: str | None = None,
+) -> str:
+    """Dispatch a tool call to the appropriate service and return a string result."""
+    import asyncio
+
+    def _run_async(coro):
+        """Run an async coroutine from sync context."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+                return future.result(timeout=60)
+            return loop.run_until_complete(coro)
+        except Exception as exc:
+            return f"Async error: {exc}"
+
     try:
+        # ── Core workspace tools ───────────────────────────────────────────────
         if name == "write_file":
             return workspace.write_file(arguments["path"], arguments["content"])
         if name == "read_file":
@@ -789,29 +1182,286 @@ def execute_tool(name: str, arguments: dict, workspace: WorkspaceService) -> str
             return _search_web(arguments["query"], arguments.get("max_results", 5))
         if name == "edit_file":
             return _edit_file(arguments["path"], arguments["old_text"], arguments["new_text"], workspace)
+
+        # ── Memory tools ───────────────────────────────────────────────────────
         if name == "memory_search":
             return _memory_search(arguments["query"], arguments.get("max_results", 5))
         if name == "memory_get":
             return _memory_get(arguments["path"], arguments.get("offset", 1), arguments.get("limit", 50))
+        if name == "memory_store":
+            content = arguments["content"]
+            tags = arguments.get("tags", [])
+            # Store in DB Memory table (async)
+            try:
+                from app.services.long_term_memory import store_memory
+                result = _run_async(store_memory(content=content, tags=tags, session_id=session_id))
+                return f"Memory stored: {result}"
+            except Exception as exc:
+                return f"Memory store error: {exc}"
+        if name == "memory_forget":
+            memory_id = arguments["memory_id"]
+            try:
+                from app.services.long_term_memory import forget_memory
+                result = _run_async(forget_memory(memory_id=memory_id))
+                return f"Memory deleted: {result}"
+            except Exception as exc:
+                return f"Memory forget error: {exc}"
+
+        # ── Gateway/status tools ───────────────────────────────────────────────
         if name == "gateway_status":
             return _gateway_status()
+
+        # ── Cron tools ─────────────────────────────────────────────────────────
         if name == "cron_add":
-            return _cron_add(arguments["name"], arguments["schedule"], arguments["message"])
+            try:
+                from app.services.cron_service import CronService
+                result = _run_async(
+                    CronService.add_job(
+                        name=arguments["name"],
+                        schedule=arguments["schedule"],
+                        message=arguments["message"],
+                        agent_id=agent_id,
+                    )
+                )
+                return f"Cron job added: {result.get('name')} [{result.get('schedule')}]"
+            except Exception as exc:
+                return _cron_add(arguments["name"], arguments["schedule"], arguments["message"])
+        if name == "cron_remove":
+            try:
+                from app.services.cron_service import CronService
+                jobs = _run_async(CronService.list_jobs())
+                matching = [j for j in jobs if j["name"] == arguments["name"]]
+                if matching:
+                    _run_async(CronService.remove_job(matching[0]["id"]))
+                    return f"Cron job removed: {arguments['name']}"
+                return f"Cron job not found: {arguments['name']}"
+            except Exception as exc:
+                return f"Cron remove error: {exc}"
+        if name == "cron_list":
+            try:
+                from app.services.cron_service import CronService
+                jobs = _run_async(CronService.list_jobs())
+                if not jobs:
+                    return "No cron jobs scheduled."
+                lines = [f"- {j['name']} [{j['schedule']}]: {j['message'][:50]}" for j in jobs]
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Cron list error: {exc}"
+
+        # ── Browser tools ──────────────────────────────────────────────────────
         if name == "browser_open":
-            return _browser_open(arguments["url"])
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.open(arguments["url"], sid)
+                if "error" in result:
+                    return f"Browser error: {result['error']}"
+                return f"Browser opened: {arguments['url']} (session={sid})"
+            except Exception as exc:
+                return _browser_open(arguments["url"])
+
         if name == "browser_snapshot":
-            return _browser_snapshot(arguments.get("full_page", False))
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.snapshot(sid, arguments.get("full_page", False))
+                if "error" in result:
+                    return f"Browser error: {result['error']}"
+                # Save base64 PNG to workspace
+                png_b64 = result.get("image", "")
+                if png_b64 and workspace:
+                    import base64
+                    import time
+                    png_path = f"screenshot_{int(time.time())}.png"
+                    workspace.write_file(png_path, "")
+                    p = workspace._safe(png_path)
+                    p.write_bytes(base64.b64decode(png_b64))
+                    return f"Screenshot saved: {png_path}"
+                return "Snapshot taken (no image data)"
+            except Exception as exc:
+                return _browser_snapshot(arguments.get("full_page", False))
+
         if name == "browser_click":
-            return _browser_click(arguments["ref"])
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.click(sid, arguments["ref"])
+                return result.get("status", "Clicked") if "error" not in result else f"Browser error: {result['error']}"
+            except Exception as exc:
+                return _browser_click(arguments["ref"])
+
         if name == "browser_type":
-            return _browser_type(arguments["ref"], arguments["text"])
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.type_text(sid, arguments["ref"], arguments["text"])
+                return result.get("status", "Typed") if "error" not in result else f"Browser error: {result['error']}"
+            except Exception as exc:
+                return _browser_type(arguments["ref"], arguments["text"])
+
+        if name == "browser_fill":
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.fill(sid, arguments["selector"], arguments["value"])
+                return result.get("status", "Filled") if "error" not in result else f"Browser error: {result['error']}"
+            except Exception as exc:
+                return f"Browser fill error: {exc}"
+
+        if name == "browser_scroll":
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.scroll(sid, arguments.get("direction", "down"), arguments.get("amount", 300))
+                return result.get("status", "Scrolled") if "error" not in result else f"Browser error: {result['error']}"
+            except Exception as exc:
+                return f"Browser scroll error: {exc}"
+
+        if name == "browser_navigate":
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.navigate(sid, arguments["url"])
+                return result.get("status", "Navigated") if "error" not in result else f"Browser error: {result['error']}"
+            except Exception as exc:
+                return f"Browser navigate error: {exc}"
+
+        if name == "browser_extract":
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                result = BrowserService.extract(sid, arguments["selector"])
+                if "error" in result:
+                    return f"Browser error: {result['error']}"
+                return result.get("text", "(no content)")
+            except Exception as exc:
+                return f"Browser extract error: {exc}"
+
+        if name == "browser_close":
+            try:
+                from app.services.browser_service import BrowserService
+                sid = session_id or "default"
+                BrowserService.close(sid)
+                return "Browser session closed"
+            except Exception as exc:
+                return f"Browser close error: {exc}"
+
+        # ── Sessions / multi-agent tools ───────────────────────────────────────
         if name == "sessions_list":
-            return "sessions_list: Sessions managed by Prime backend."
+            try:
+                from app.services.multi_agent_service import MultiAgentService
+                sessions = _run_async(
+                    MultiAgentService.list_sessions(
+                        limit=arguments.get("limit", 20),
+                        active_minutes=arguments.get("active_minutes"),
+                    )
+                )
+                if not sessions:
+                    return "No active sessions."
+                lines = [f"- {s['session_key']} ({s.get('status', '?')}) [{s.get('type', '?')}]" for s in sessions]
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Sessions list error: {exc}"
+
         if name == "sessions_send":
-            return f"sessions_send: Would send message to {arguments.get('session_key')}"
+            try:
+                from app.services.multi_agent_service import MultiAgentService
+                result = _run_async(
+                    MultiAgentService.send_to_session(
+                        arguments["session_key"], arguments["message"]
+                    )
+                )
+                return result
+            except Exception as exc:
+                return f"Sessions send error: {exc}"
+
         if name == "sessions_spawn":
-            return f"sessions_spawn: Would spawn agent for task: {arguments.get('task', '')[:50]}..."
+            try:
+                from app.services.multi_agent_service import MultiAgentService
+                child_key = _run_async(
+                    MultiAgentService.spawn_agent(
+                        task=arguments["task"],
+                        agent_id=arguments.get("agent_id", agent_id),
+                        parent_session_id=session_id,
+                    )
+                )
+                return f"Sub-agent spawned: session_key={child_key}"
+            except Exception as exc:
+                return f"sessions_spawn error: {exc}"
+
+        # ── Webhook tools ──────────────────────────────────────────────────────
+        if name == "webhook_register":
+            try:
+                from app.services.webhook_service import WebhookService
+                result = _run_async(
+                    WebhookService.register(
+                        name=arguments["name"],
+                        path=arguments["path"],
+                        message_template=arguments["message_template"],
+                        agent_id=agent_id,
+                    )
+                )
+                return f"Webhook registered: {result.get('path')}"
+            except Exception as exc:
+                return f"Webhook register error: {exc}"
+
+        if name == "webhook_list":
+            try:
+                from app.services.webhook_service import WebhookService
+                bindings = _run_async(WebhookService.list_bindings())
+                if not bindings:
+                    return "No webhooks registered."
+                lines = [f"- {b['name']}: POST /hooks{b['path']}" for b in bindings]
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Webhook list error: {exc}"
+
+        # ── Skills tools ───────────────────────────────────────────────────────
+        if name == "skill_list":
+            try:
+                from app.skills.registry import SkillsRegistry
+                skills = SkillsRegistry.list_skills()
+                if not skills:
+                    return "No skills registered."
+                lines = [f"- {s['name']} v{s['version']}: {', '.join(s['tools'])}" for s in skills]
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Skill list error: {exc}"
+
+        if name == "skill_install":
+            try:
+                from app.skills.registry import SkillsRegistry
+                path = arguments["name_or_path"]
+                registered = SkillsRegistry.register_from_workspace(path)
+                return f"Skills installed: {', '.join(registered) or 'none found'}"
+            except Exception as exc:
+                return f"Skill install error: {exc}"
+
+        if name == "skill_create":
+            try:
+                from app.skills.pi_agent import PiAgent
+                workspace_path = workspace.root if workspace else "."
+                pi = PiAgent(workspace_path=str(workspace_path))
+                skill_data = pi.create_skill(
+                    description=arguments["description"],
+                    name=arguments["name"],
+                )
+                path = pi.install_skill(skill_data)
+                return f"Skill created and installed: {skill_data['name']} at {path}"
+            except Exception as exc:
+                return f"Skill create error: {exc}"
+
+        # ── Fallback: try skill registry ───────────────────────────────────────
+        try:
+            from app.skills.registry import SkillsRegistry
+            result = SkillsRegistry.execute_skill_tool(name, arguments)
+            if result is not None:
+                return result
+        except Exception:
+            pass
+
         return f"Unknown tool: {name}"
+
     except Exception as exc:
         return f"Tool error ({name}): {exc}"
 

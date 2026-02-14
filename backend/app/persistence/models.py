@@ -560,3 +560,89 @@ Index("ix_user_memories_user_agent", UserMemory.user_id, UserMemory.agent_id)
 Index("ix_cost_records_created", CostRecord.created_at, CostRecord.org_id)
 Index("ix_cost_records_agent", CostRecord.agent_id, CostRecord.created_at)
 Index("ix_audit_logs_action", AuditLog.action, AuditLog.created_at)
+
+
+# ── New models for OpenClaw parity ───────────────────────────────────────────
+
+
+class SandboxStatus(str, enum.Enum):
+    running = "running"
+    stopped = "stopped"
+    failed = "failed"
+
+
+class SandboxSession(Base):
+    """Docker sandbox container tied to an agent session."""
+
+    __tablename__ = "sandbox_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=True
+    )
+    container_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[SandboxStatus] = mapped_column(Enum(SandboxStatus), default=SandboxStatus.running)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Memory(Base):
+    """Persistent long-term memory record for a user."""
+
+    __tablename__ = "memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String(128)), default=list)
+    source: Mapped[str] = mapped_column(String(64), default="conversation")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+    user = relationship("User")
+
+
+class CronJob(Base):
+    """Scheduled cron job that triggers an agent."""
+
+    __tablename__ = "cron_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    schedule: Mapped[str] = mapped_column(String(128), nullable=False)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    session_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+    agent = relationship("Agent")
+
+
+class WebhookBinding(Base):
+    """Inbound webhook that triggers an agent when called."""
+
+    __tablename__ = "webhook_bindings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    path: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    secret: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True)
+    message_template: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+    agent = relationship("Agent")
+
+
+Index("ix_memories_user_id", Memory.user_id, Memory.created_at)
+Index("ix_cron_jobs_active", CronJob.active, CronJob.next_run)
+Index("ix_webhook_bindings_path", WebhookBinding.path)

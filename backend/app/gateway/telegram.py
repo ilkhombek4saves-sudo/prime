@@ -823,7 +823,10 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         results = await loop.run_in_executor(None, _search_svc.search, msg.text)
         search_context = _search_svc.format_for_context(results)
 
-    system_parts = []
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%A, %d %B %Y, %H:%M UTC")
+    system_parts = [f"Today's date and time: {date_str}"]
     if agent_system_prompt:
         system_parts.append(agent_system_prompt)
     if ltm_context:
@@ -832,7 +835,7 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         system_parts.append(rag_context)
     if search_context:
         system_parts.append(search_context)
-    system = "\n\n".join(system_parts) if system_parts else None
+    system = "\n\n".join(system_parts)
 
     optimization_plan = _token_optimizer.optimize_request(
         provider_type=provider_type,

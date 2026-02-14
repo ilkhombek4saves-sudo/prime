@@ -19,6 +19,13 @@ from app.api import (
 )
 from app.gateway.webchat import router as webchat_router
 from app.api.analytics import router as analytics_router
+from app.api.memory import router as memory_router
+from app.api.cron import router as cron_router
+from app.api.webhooks import router as webhooks_router
+from app.api.skills import router as skills_router
+from app.api.tailscale import router as tailscale_router
+from app.api.doctor import router as doctor_router
+from app.api.security import router as security_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -39,3 +46,10 @@ api_router.include_router(organizations.router)
 api_router.include_router(ws.router)
 api_router.include_router(webchat_router)
 api_router.include_router(analytics_router)
+api_router.include_router(memory_router)
+api_router.include_router(cron_router)
+api_router.include_router(webhooks_router)
+api_router.include_router(skills_router)
+api_router.include_router(tailscale_router)
+api_router.include_router(doctor_router)
+api_router.include_router(security_router)

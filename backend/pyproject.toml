@@ -26,6 +26,12 @@ dependencies = [
   # RAG document parsing (optional — graceful ImportError if not installed)
   "pypdf>=4.0.0",
   "python-docx>=1.1.0",
+  # Phase 1: Docker sandbox
+  "docker>=7.0",
+  # Phase 2: Cron scheduler (already present via apscheduler)
+  "apscheduler>=3.10.0",
+  # Phase 3: Skills hot-reload (optional)
+  "watchdog>=4.0.0",
 ]
 
 [project.optional-dependencies]

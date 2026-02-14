@@ -24,3 +24,14 @@ def get_session(session_id: UUID, db: Session = Depends(get_db), user: dict = De
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@router.get("/{session_key}/transcript")
+async def get_session_transcript(
+    session_key: str,
+    user: dict = Depends(get_current_user),
+):
+    """Return the full message transcript for a session (DB or in-memory sub-agent)."""
+    from app.services.multi_agent_service import MultiAgentService
+    messages = await MultiAgentService.get_transcript(session_key)
+    return {"session_key": session_key, "messages": messages}

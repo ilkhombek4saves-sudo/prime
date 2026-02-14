@@ -149,3 +149,49 @@ class LongTermMemoryService:
                 )
                 stored.append(mem)
         return stored
+
+
+# ── Module-level helpers used by tools.py ────────────────────────────────────
+
+
+async def store_memory(
+    content: str,
+    tags: list[str] | None = None,
+    session_id: str | None = None,
+) -> str:
+    """Store a new Memory record (new persistent memory table)."""
+    try:
+        from app.persistence.database import SyncSessionLocal
+        from app.persistence.models import Memory
+        import uuid
+
+        with SyncSessionLocal() as db:
+            mem = Memory(
+                user_id=uuid.uuid4(),  # anonymous if no user context
+                content=content,
+                tags=tags or [],
+                source="agent_tool",
+            )
+            db.add(mem)
+            db.commit()
+            return str(mem.id)
+    except Exception as exc:
+        return f"error: {exc}"
+
+
+async def forget_memory(memory_id: str) -> str:
+    """Delete a Memory record by ID."""
+    try:
+        from app.persistence.database import SyncSessionLocal
+        from app.persistence.models import Memory
+        import uuid
+
+        with SyncSessionLocal() as db:
+            mem = db.get(Memory, uuid.UUID(memory_id))
+            if mem:
+                db.delete(mem)
+                db.commit()
+                return f"deleted:{memory_id}"
+            return f"not_found:{memory_id}"
+    except Exception as exc:
+        return f"error: {exc}"

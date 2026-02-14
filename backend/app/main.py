@@ -97,6 +97,30 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("Discord gateway failed to start: %s", exc, exc_info=True)
 
+    # Start Slack gateway if configured
+    slack_gateway = None
+    if getenv("SLACK_BOT_TOKEN", "").strip():
+        try:
+            from app.gateway.slack import build_slack_gateway
+            slack_gateway = build_slack_gateway()
+            if slack_gateway:
+                await slack_gateway.start()
+                logger.info("Slack gateway started")
+        except Exception as exc:
+            logger.error("Slack gateway failed to start: %s", exc, exc_info=True)
+
+    # Start WhatsApp gateway if configured
+    whatsapp_gateway = None
+    if getenv("WHATSAPP_TOKEN", "").strip() and getenv("WHATSAPP_PHONE_ID", "").strip():
+        try:
+            from app.gateway.whatsapp import build_whatsapp_gateway
+            whatsapp_gateway = build_whatsapp_gateway()
+            if whatsapp_gateway:
+                await whatsapp_gateway.start()
+                logger.info("WhatsApp gateway started")
+        except Exception as exc:
+            logger.error("WhatsApp gateway failed to start: %s", exc, exc_info=True)
+
     # Config hot-reload
     config_watcher = None
     if settings.config_watch_enabled:
@@ -107,7 +131,45 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # pragma: no cover
             logger.error("Config watcher failed to start: %s", exc, exc_info=True)
 
+    # Register bundled skills
+    try:
+        from app.skills.registry import SkillsRegistry
+        SkillsRegistry.register_bundled()
+        logger.info("Bundled skills registered")
+    except Exception as exc:  # pragma: no cover
+        logger.error("Skills registry failed: %s", exc, exc_info=True)
+
+    # Start cron scheduler
+    try:
+        from app.services.cron_service import CronService
+        await CronService.start()
+        logger.info("Cron scheduler started")
+    except Exception as exc:  # pragma: no cover
+        logger.error("Cron service failed to start: %s", exc, exc_info=True)
+
+    # Start browser bridge (best-effort)
+    try:
+        from app.services.browser_service import BrowserService
+        BrowserService.ensure_running()
+        logger.info("Browser bridge checked")
+    except Exception as exc:  # pragma: no cover
+        logger.debug("Browser bridge not started: %s", exc)
+
     yield
+
+    # Stop cron scheduler
+    try:
+        from app.services.cron_service import CronService
+        await CronService.stop()
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Cron service stop error: %s", exc)
+
+    # Stop browser bridge
+    try:
+        from app.services.browser_service import BrowserService
+        BrowserService.stop()
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Browser bridge stop error: %s", exc)
 
     if config_watcher is not None:
         try:
@@ -120,6 +182,18 @@ async def lifespan(app: FastAPI):
             await discord_gateway.stop()
         except Exception as exc:  # pragma: no cover
             logger.warning("Discord gateway stop error: %s", exc)
+
+    if slack_gateway is not None:
+        try:
+            await slack_gateway.stop()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Slack gateway stop error: %s", exc)
+
+    if whatsapp_gateway is not None:
+        try:
+            await whatsapp_gateway.stop()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("WhatsApp gateway stop error: %s", exc)
 
     if tg_gateway is not None:
         try:
@@ -177,6 +251,30 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(api_router)
+
+    # Mount public webhook receiver at root (not under /api)
+    from app.api.webhooks import public_router as webhook_public_router
+    app.include_router(webhook_public_router)
+
+    # Mount WhatsApp webhook at root (Meta requires non-/api path)
+    from app.gateway.whatsapp import webhook_router as whatsapp_webhook_router
+    app.include_router(whatsapp_webhook_router)
+
+    # Mount Slack HTTP Events endpoint at root (for non-Socket-Mode deployments)
+    from fastapi import Request as _Request
+    from fastapi.responses import JSONResponse as _JSONResponse
+
+    @app.post("/slack/events", tags=["slack"])
+    async def slack_events_http(request: _Request):
+        """Receive Slack Events API callbacks (HTTP mode, no app token)."""
+        from app.gateway.slack import _gateway_instance as _slack_gw
+        if _slack_gw is None:
+            return _JSONResponse({"error": "slack_not_configured"}, status_code=503)
+        body = await request.body()
+        headers = dict(request.headers)
+        result = await _slack_gw.handle_http_event(body, headers)
+        return result
+
     return app
 
 

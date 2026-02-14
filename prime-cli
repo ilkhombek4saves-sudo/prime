@@ -1,30 +1,10 @@
-#!/bin/bash
-# Prime CLI — Unified entrypoint for both Lite and Full modes
+#!/usr/bin/env python3
+"""Prime CLI entry point"""
+import sys
+import os
 
-set -euo pipefail
+# Ensure project root is in Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Detect mode
-if [[ -n "${PRIME_LITE:-}" ]] || [[ -f "$HOME/.config/prime/config.yaml" ]]; then
-    # Lite mode
-    PRIME_HOME="${PRIME_HOME:-$HOME/.prime}"
-    LITE_DIR="${PRIME_HOME}/lite"
-    
-    if [[ -f "$LITE_DIR/prime-lite.py" ]]; then
-        exec python3 "$LITE_DIR/prime-lite.py" "$@"
-    elif [[ -f "$(dirname "$0")/lite/prime-lite.py" ]]; then
-        # Running from repo
-        exec python3 "$(dirname "$0")/lite/prime-lite.py" "$@"
-    else
-        echo "Error: Prime Lite not found. Run install-lite.sh first." >&2
-        exit 1
-    fi
-else
-    # Full mode (Docker)
-    if [[ -f "$(dirname "$0")/prime" ]]; then
-        # Use original prime script
-        exec "$(dirname "$0")/prime" "$@"
-    else
-        echo "Error: Prime not initialized. Run: ./install-lite.sh or docker-compose up" >&2
-        exit 1
-    fi
-fi
+from prime.cli import main
+main()

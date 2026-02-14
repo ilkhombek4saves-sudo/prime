@@ -52,6 +52,9 @@ class AgentRunner:
         on_token: Callable[[str], None] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        parent_session_id: str | None = None,
     ) -> str:
         """
         Backward-compatible wrapper that returns only the plain text response.
@@ -68,6 +71,9 @@ class AgentRunner:
             on_token=on_token,
             model=model,
             max_tokens=max_tokens,
+            session_id=session_id,
+            agent_id=agent_id,
+            parent_session_id=parent_session_id,
         )
         return result.text
 
@@ -84,6 +90,9 @@ class AgentRunner:
         on_token: Callable[[str], None] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        parent_session_id: str | None = None,
     ) -> AgentRunResult:
         """
         Run the agentic loop and return text + usage metadata.
@@ -113,6 +122,8 @@ class AgentRunner:
                 on_token=on_token,
                 model_override=model,
                 max_tokens_override=max_tokens,
+                session_id=session_id,
+                agent_id=agent_id,
             )
         # All OpenAI-compatible providers
         return self._run_openai(
@@ -125,6 +136,8 @@ class AgentRunner:
             on_token=on_token,
             model_override=model,
             max_tokens_override=max_tokens,
+            session_id=session_id,
+            agent_id=agent_id,
         )
 
     @staticmethod
@@ -156,6 +169,8 @@ class AgentRunner:
         on_token: Callable[[str], None] | None,
         model_override: str | None,
         max_tokens_override: int | None,
+        session_id: str | None = None,
+        agent_id: str | None = None,
     ) -> AgentRunResult:
         api_key = config.get("api_key", "")
         base_url = config.get("api_base", "https://api.openai.com/v1").rstrip("/")
@@ -259,7 +274,11 @@ class AgentRunner:
                     args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     args = {}
-                result = execute_tool(name, args, workspace)
+                result = execute_tool(
+                    name, args, workspace,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                )
                 logger.info("Tool %s(%s) → %s", name, list(args.keys()), result[:80])
                 messages.append({
                     "role": "tool",
@@ -374,6 +393,8 @@ class AgentRunner:
         on_token: Callable[[str], None] | None,
         model_override: str | None,
         max_tokens_override: int | None,
+        session_id: str | None = None,
+        agent_id: str | None = None,
     ) -> AgentRunResult:
         api_key = config.get("api_key", "")
         base_url = config.get("api_base", "https://api.anthropic.com").rstrip("/")
@@ -478,7 +499,11 @@ class AgentRunner:
             for block in tool_use_blocks:
                 name = block["name"]
                 args = block.get("input", {})
-                result = execute_tool(name, args, workspace)
+                result = execute_tool(
+                    name, args, workspace,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                )
                 logger.info("Tool %s(%s) → %s", name, list(args.keys()), result[:80])
                 tool_results.append({
                     "type": "tool_result",

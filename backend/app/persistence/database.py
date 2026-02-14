@@ -15,11 +15,13 @@ if database_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 
 engine = create_engine(
-    database_url, 
+    database_url,
     pool_pre_ping=True,
     connect_args=connect_args
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+# Alias for clarity in services that need a sync session
+SyncSessionLocal = SessionLocal
 Base = declarative_base()
 
 

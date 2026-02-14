@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Prime Gateway — starts the central control plane (REST API + Dashboard + WebChat)"""
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from prime.gateway.server import main
+main()

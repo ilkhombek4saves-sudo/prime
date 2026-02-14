@@ -151,7 +151,7 @@ migrate: ## Apply Alembic migrations
 
 install-cli: ## Install prime command in ~/.local/bin
 	@mkdir -p "$$HOME/.local/bin"
-	@ln -sf "$(PWD)/prime" "$$HOME/.local/bin/prime"
+	@ln -sf "$(PWD)/prime-cli" "$$HOME/.local/bin/prime"
 	@echo "$(GRN)✓$(RST) Installed: $$HOME/.local/bin/prime"
 	@echo "$(DIM)If needed, add this to your shell profile: export PATH=\"$$HOME/.local/bin:$$PATH\"$(RST)"
 

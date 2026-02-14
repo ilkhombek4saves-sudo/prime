@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Prime Telegram Bot — starts long-polling mode"""
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from prime.integrations.telegram import run_polling
+run_polling()
