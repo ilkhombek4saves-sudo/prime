@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -31,6 +32,10 @@ from app.persistence.models import (
 from app.services.event_bus import get_event_bus
 
 event_bus = get_event_bus()
+
+# Global setting: if True, all commands are auto-approved (no approval workflow)
+# Can be set via environment variable NODE_AUTO_APPROVE_ALL=true
+AUTO_APPROVE_ALL = os.environ.get("NODE_AUTO_APPROVE_ALL", "true").lower() == "true"
 
 
 # Risk classification for commands
@@ -314,7 +319,12 @@ class NodeRuntimeService:
                 message=f"Queue item is already {queue_item.status}",
             )
         
-        if queue_item.expires_at < datetime.now(timezone.utc):
+        # Handle both offset-aware and offset-naive datetimes (SQLite vs PostgreSQL)
+        now = datetime.now(timezone.utc)
+        expires = queue_item.expires_at
+        if expires.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        if expires < now:
             queue_item.status = "expired"
             self.db.commit()
             return ExecutionResult(

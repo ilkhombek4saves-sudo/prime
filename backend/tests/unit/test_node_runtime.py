@@ -2,6 +2,7 @@
 Tests for Node Runtime Service — OpenClaw-style node execution with approval workflow.
 """
 
+import os
 import pytest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -15,14 +16,27 @@ def node_service(db_session):
     return NodeRuntimeService(db_session)
 
 
+# Store original AUTO_APPROVE_ALL value
+_original_auto_approve = None
+
+def setup_module():
+    global _original_auto_approve
+    _original_auto_approve = NodeRuntimeService.AUTO_APPROVE_ALL
+    # Disable auto-approve for testing approval workflow
+    NodeRuntimeService.AUTO_APPROVE_ALL = False
+
+def teardown_module():
+    global _original_auto_approve
+    NodeRuntimeService.AUTO_APPROVE_ALL = _original_auto_approve
+
+
 @pytest.fixture
 def test_user(db_session):
     user = User(
         id=uuid4(),
         username="testoperator",
-        email="test@example.com",
         role=UserRole.admin,
-        hashed_password="hashed",
+        password_hash="hashed",
     )
     db_session.add(user)
     db_session.commit()
@@ -142,7 +156,7 @@ class TestRequestExecution:
         assert result.success is True
         assert result.requires_approval is False
         assert result.status == "approved"
-        assert "auto_approved" in result.message
+        assert "auto-approved" in result.message
     
     def test_high_risk_requires_approval(self, node_service, db_session):
         """High risk commands should require approval."""
@@ -246,14 +260,14 @@ class TestApprovalWorkflow:
     
     def test_reject_execution(self, node_service, db_session, test_user):
         """Test rejecting a pending execution."""
-        # Create pending execution
+        # Create pending execution (high risk, not critical)
         result = node_service.request_execution(
             connection_id="conn-123",
             node_id="node-456",
             node_name="test-node",
             node_caps=["exec", "exec.high"],
             command="sudo",
-            params={"args": "rm -rf /"},
+            params={"args": "apt update"},
         )
         
         assert result.requires_approval is True
