@@ -147,18 +147,20 @@ EOF
 start_prime() {
     log "Запуск Prime..."
     
-    # Останавливаем существующие контейнеры Prime
-    if docker compose ps 2>/dev/null | grep -q prime; then
-        warn "Найдены запущенные контейнеры Prime, останавливаем..."
-        docker compose down 2>&1 | tail -1
-    fi
-    
-    # Проверяем занятость порта 5432
-    if ss -tlnp 2>/dev/null | grep -q ':5432 '; then
-        warn "Порт 5432 занят, пробуем освободить..."
-        docker stop $(docker ps -q --filter publish=5432 2>/dev/null) 2>/dev/null || true
-        docker rm $(docker ps -aq --filter publish=5432 2>/dev/null) 2>/dev/null || true
-        sleep 2
+    # Полная остановка и удаление старых контейнеров
+    if docker compose ps 2>/dev/null | grep -q prime || docker ps 2>/dev/null | grep -q prime; then
+        warn "Останавливаем старые контейнеры..."
+        docker compose down -v --remove-orphans 2>&1 | tail -2
+        
+        # Ждём пока порты освободятся
+        for i in {1..10}; do
+            if ! ss -tlnp 2>/dev/null | grep -q ':5432 '; then
+                break
+            fi
+            echo -n "."
+            sleep 1
+        done
+        echo
     fi
     
     # Запускаем
