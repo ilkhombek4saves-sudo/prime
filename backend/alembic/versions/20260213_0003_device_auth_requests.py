@@ -66,9 +66,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    existing_tables = set(inspector.get_table_names())
 
-    if "device_auth_requests" in inspector.get_table_names():
-        op.drop_index("ix_device_auth_requests_status_expires_at", table_name="device_auth_requests")
+    if "device_auth_requests" in existing_tables:
+        indexes = [idx["name"] for idx in inspector.get_indexes("device_auth_requests")]
+        if "ix_device_auth_requests_status_expires_at" in indexes:
+            op.drop_index("ix_device_auth_requests_status_expires_at", table_name="device_auth_requests")
         op.drop_table("device_auth_requests")
 
     op.execute(f"DROP TYPE IF EXISTS {_STATUS_ENUM_NAME}")

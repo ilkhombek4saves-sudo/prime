@@ -174,12 +174,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("document_chunks")
-    op.drop_table("documents")
-    op.drop_table("knowledge_bases")
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = set(inspector.get_table_names())
+
+    if "document_chunks" in existing_tables:
+        op.drop_table("document_chunks")
+    if "documents" in existing_tables:
+        op.drop_table("documents")
+    if "knowledge_bases" in existing_tables:
+        op.drop_table("knowledge_bases")
 
     for table in ("users", "bots", "agents", "providers"):
-        op.drop_column(table, "org_id")
+        if table in existing_tables:
+            columns = [col["name"] for col in inspector.get_columns(table)]
+            if "org_id" in columns:
+                op.drop_column(table, "org_id")
 
-    op.drop_table("organizations")
+    if "organizations" in existing_tables:
+        op.drop_table("organizations")
     op.execute("DROP TYPE IF EXISTS documentstatus")
