@@ -352,20 +352,31 @@ create_cli() {
     # Install Python CLI
     log "Установка Prime CLI..."
     
+    # Ensure Python requests library is available
+    if ! python3 -c "import requests" 2>/dev/null; then
+        log "Установка Python requests..."
+        pip3 install requests -q 2>/dev/null || python3 -m pip install requests -q 2>/dev/null || true
+    fi
+    
+    # Ensure cli/prime.py exists and is executable
+    if [[ -f "$PRIME_DIR/cli/prime.py" ]]; then
+        chmod +x "$PRIME_DIR/cli/prime.py"
+    fi
+    
     # Create wrapper script that calls Python CLI
     cat > "$BIN_DIR/prime" << EOF
 #!/bin/bash
 export PRIME_HOME="$PRIME_DIR"
 export PYTHONPATH="$PRIME_DIR/cli:$PYTHONPATH"
-python3 "$PRIME_DIR/cli/prime.py" "\$@"
+exec python3 "$PRIME_DIR/cli/prime.py" "\$@"
 EOF
     chmod +x "$BIN_DIR/prime"
     
-    # Create symlink for 'prime' command
-    if [[ -f "$PRIME_DIR/cli/prime.py" ]]; then
+    # Verify installation
+    if [[ -x "$BIN_DIR/prime" ]]; then
         ok "CLI установлен: $BIN_DIR/prime"
     else
-        warn "CLI файл не найден, используем базовый скрипт"
+        error "Не удалось установить CLI"
     fi
     
     # Добавляем в PATH
