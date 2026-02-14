@@ -13,19 +13,19 @@
         file_server
         header Content-Type text/plain
     }
-    
+
     # CLI binary
     handle /prime {
         root * /srv
         file_server
         header Content-Type application/octet-stream
     }
-    
+
     # Health check
     handle /health {
         respond "OK" 200
     }
-    
+
     # API routes (HTTP for now)
     handle /api/* {
         reverse_proxy backend:8000 {
@@ -35,7 +35,7 @@
             header_up X-Forwarded-Proto {scheme}
         }
     }
-    
+
     # WebSocket
     handle /ws/* {
         reverse_proxy backend:8000 {
@@ -47,7 +47,7 @@
             header_up Connection {>Connection}
         }
     }
-    
+
     # Default
     handle {
         respond "Prime AI Agent Platform" 200
@@ -57,31 +57,52 @@
 # HTTPS (when certificates available)
 primeagent.duckdns.org:443 {
     tls admin@primeagent.duckdns.org
-    
+
+    # Security headers for all responses
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' wss: ws:; font-src 'self'"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+
     handle /install.sh {
         root * /srv
         file_server
         header Content-Type text/plain
     }
-    
+
     handle /prime {
         root * /srv
         file_server
         header Content-Type application/octet-stream
     }
-    
+
     handle /api/* {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+        }
     }
-    
+
     handle /ws/* {
         reverse_proxy backend:8000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
             header_up Upgrade {>Upgrade}
             header_up Connection {>Connection}
         }
     }
-    
+
     handle {
-        respond "Prime AI Agent Platform (HTTPS)" 200
+        respond "Prime AI Agent Platform" 200
     }
 }

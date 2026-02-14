@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+COPY --from=builder /root/.local /home/prime/.local
 
 # Copy application
 COPY app/ ./app/
@@ -47,13 +47,13 @@ COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
 # Environment
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/home/prime/.local/bin:$PATH
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Non-root user (optional, but good for security)
-# RUN useradd -m -u 1000 prime && chown -R prime:prime /app
-# USER prime
+# Non-root user for security
+RUN useradd -m -u 1000 prime && chown -R prime:prime /app
+USER prime
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

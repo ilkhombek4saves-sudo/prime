@@ -76,7 +76,8 @@ class WhatsAppGateway:
     def verify_signature(self, body: bytes, signature: str) -> bool:
         """Verify X-Hub-Signature-256 header."""
         if not self.app_secret:
-            return True
+            logger.warning("WHATSAPP_APP_SECRET not configured — rejecting unsigned request")
+            return False
         expected = "sha256=" + hmac.new(
             self.app_secret.encode(), body, hashlib.sha256
         ).hexdigest()
@@ -140,9 +141,11 @@ class WhatsAppGateway:
     async def _run_agent(self, text: str, session_id: str, user_id: str) -> str:
         try:
             from app.services.agent_runner import AgentRunner
-            runner = AgentRunner(session_id=session_id)
-            result = await runner.run(text)
-            return result.get("response", "") if isinstance(result, dict) else str(result)
+            runner = AgentRunner()
+            result = runner.run(text)
+            if isinstance(result, str):
+                return result
+            return result.text if hasattr(result, "text") else str(result)
         except Exception as exc:
             logger.error("WhatsApp agent error: %s", exc)
             return f"Error: {exc}"

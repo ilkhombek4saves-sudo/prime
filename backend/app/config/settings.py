@@ -1,7 +1,13 @@
+import logging
+import secrets
 from dataclasses import dataclass
 from functools import lru_cache
 from os import getenv
 from typing import Literal
+
+logger = logging.getLogger(__name__)
+
+_INSECURE_DEFAULTS = {"change-me", "change-me-too", ""}
 
 
 @dataclass
@@ -14,8 +20,8 @@ class Settings:
     app_port: int = 8000
 
     database_url: str = "sqlite:///./multibot.db"
-    secret_key: str = "change-me"
-    jwt_secret: str = "change-me-too"
+    secret_key: str = ""
+    jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 60
     refresh_token_ttl_minutes: int = 60 * 24 * 14
@@ -72,16 +78,42 @@ def get_settings() -> Settings:
             return default
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
+    app_env = getenv("APP_ENV", "dev")
+
+    secret_key = getenv("SECRET_KEY", "")
+    jwt_secret = getenv("JWT_SECRET", "")
+
+    # In production, refuse to start with insecure/missing secrets
+    if app_env == "prod":
+        if secret_key in _INSECURE_DEFAULTS:
+            raise RuntimeError(
+                "SECRET_KEY is not set or uses an insecure default. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        if jwt_secret in _INSECURE_DEFAULTS:
+            raise RuntimeError(
+                "JWT_SECRET is not set or uses an insecure default. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+    else:
+        # In dev/test, generate random secrets if not provided
+        if secret_key in _INSECURE_DEFAULTS:
+            secret_key = secrets.token_hex(32)
+            logger.warning("SECRET_KEY not set — using auto-generated value (not suitable for production)")
+        if jwt_secret in _INSECURE_DEFAULTS:
+            jwt_secret = secrets.token_hex(32)
+            logger.warning("JWT_SECRET not set — using auto-generated value (not suitable for production)")
+
     return Settings(
         app_name=getenv("APP_NAME", "MultiBot Aggregator"),
-        app_env=getenv("APP_ENV", "dev"),
+        app_env=app_env,
         app_version=getenv("APP_VERSION", "0.1.0"),
         app_commit=getenv("APP_COMMIT"),
         app_host=getenv("APP_HOST", "0.0.0.0"),
         app_port=int(getenv("APP_PORT", "8000")),
         database_url=getenv("DATABASE_URL", "sqlite:///./multibot.db"),
-        secret_key=getenv("SECRET_KEY", "change-me"),
-        jwt_secret=getenv("JWT_SECRET", "change-me-too"),
+        secret_key=secret_key,
+        jwt_secret=jwt_secret,
         jwt_algorithm=getenv("JWT_ALGORITHM", "HS256"),
         access_token_ttl_minutes=int(getenv("ACCESS_TOKEN_TTL_MINUTES", "60")),
         refresh_token_ttl_minutes=int(getenv("REFRESH_TOKEN_TTL_MINUTES", str(60 * 24 * 14))),

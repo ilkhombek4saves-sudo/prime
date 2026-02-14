@@ -146,7 +146,8 @@ class SlackGateway:
     def verify_signature(self, body: bytes, timestamp: str, signature: str) -> bool:
         """Verify Slack request signature (HMAC-SHA256)."""
         if not self.signing_secret:
-            return True  # Skip verification if no secret configured
+            logger.warning("SLACK_SIGNING_SECRET not configured — rejecting unsigned request")
+            return False
         basestring = f"v0:{timestamp}:{body.decode()}".encode()
         expected = "v0=" + hmac.new(
             self.signing_secret.encode(), basestring, hashlib.sha256
@@ -235,9 +236,11 @@ class SlackGateway:
         # Default: use backend AgentRunner
         try:
             from app.services.agent_runner import AgentRunner
-            runner = AgentRunner(session_id=session_id)
-            result = await runner.run(text)
-            return result.get("response", "") if isinstance(result, dict) else str(result)
+            runner = AgentRunner()
+            result = runner.run(text)
+            if isinstance(result, str):
+                return result
+            return result.text if hasattr(result, "text") else str(result)
         except Exception as exc:
             logger.error("Slack agent runner error: %s", exc)
             return f"Error processing request: {exc}"

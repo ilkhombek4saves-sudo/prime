@@ -318,8 +318,9 @@ def cmd_doctor(args):
             if health:
                 ok("Prime запущен")
                 checks[-1] = ("API", True, "Started")
-    else:
-        # 3. Database
+    
+    # 3. Database
+    if health:
         log("Проверка базы данных...")
         doctor = api_get('doctor')
         if doctor:

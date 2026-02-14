@@ -220,19 +220,23 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
-    # CORS — allow frontend origins (restrict in production via env var)
-    allowed_origins = [
-        "http://localhost:3000",   # landing page
-        "http://localhost:5173",   # admin dashboard (dev)
-        "http://localhost:80",
-        "http://localhost",
-    ]
+    # CORS — allow frontend origins (restrict in production via CORS_ORIGINS env var)
+    cors_env = getenv("CORS_ORIGINS", "").strip()
+    if cors_env:
+        allowed_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+    else:
+        allowed_origins = [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:80",
+            "http://localhost",
+        ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Idempotency-Key"],
     )
 
     app.add_middleware(RequestContextMiddleware)
