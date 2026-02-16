@@ -12,10 +12,16 @@ from app.services.human_engine import HumanInteractionEngine
 
 
 class WorkspaceService:
-    def __init__(self, root: str, humanization: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        root: str,
+        humanization: dict[str, Any] | None = None,
+        use_sandbox: bool = True,
+    ) -> None:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self._human_engine = HumanInteractionEngine.from_config(humanization)
+        self._use_sandbox = use_sandbox
 
     def _safe(self, path: str) -> Path:
         resolved = (self.root / path).resolve()
@@ -48,6 +54,36 @@ class WorkspaceService:
 
     def run_command(self, command: str) -> str:
         self._human_engine.sleep_think(complexity=len(command) // 16)
+
+        # Use Docker sandbox if enabled and available
+        if self._use_sandbox:
+            try:
+                from app.services.sandbox_service import SandboxService
+
+                if SandboxService.is_available():
+                    import asyncio
+
+                    loop = asyncio.get_event_loop()
+                    result = loop.run_until_complete(
+                        SandboxService.run_command(
+                            command,
+                            working_dir=str(self.root),
+                            timeout=60,
+                            allow_network=False,
+                        )
+                    )
+                    out = result["stdout"].strip()
+                    if result["exit_code"] != 0:
+                        out += f"\n[exit code: {result['exit_code']}]"
+                    self._human_engine.pace_text(out)
+                    if len(out) > 4000:
+                        out = out[:4000] + "\n...[truncated]"
+                    return out or "(no output)"
+            except Exception as e:
+                # Fallback to subprocess if sandbox fails
+                pass
+
+        # Fallback: direct subprocess (less secure)
         try:
             r = subprocess.run(
                 command,

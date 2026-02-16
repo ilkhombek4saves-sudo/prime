@@ -3,7 +3,7 @@ bots:
 - name: support_bot
   token_env: TELEGRAM_BOT_TOKEN_SUPPORT
   channels: [telegram]
-  allowed_user_ids: [123456789]
+  allowed_user_ids: [1267937858]
   active: true
   provider_defaults:
     chat: openai_default
@@ -11,8 +11,8 @@ bots:
 - name: ops_bot
   token_env: TELEGRAM_BOT_TOKEN_OPS
   channels: [telegram]
-  allowed_user_ids: [123456789]
-  active: true
+  allowed_user_ids: [1267937858]
+  active: false
   provider_defaults:
     deploy: shell_default
     tests: shell_default

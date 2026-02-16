@@ -1,0 +1,253 @@
+# Prime Secure Deployment - Egress-Controlled
+# Только разрешенные исходящие соединения к AI API
+# Все контейнеры изолированы, выход в интернет только через proxy
+
+version: '3.8'
+
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # EGRESS PROXY - Контроль исходящего трафика
+  # ═══════════════════════════════════════════════════════════════
+  egress-proxy:
+    image: alpine:latest
+    container_name: prime-egress-proxy
+    restart: always
+    volumes:
+      - ./infrastructure/egress/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+      - ./infrastructure/egress/whitelist.txt:/etc/tinyproxy/whitelist.txt:ro
+      - egress_logs:/var/log/tinyproxy
+    ports:
+      - "8888:8888"  # Internal proxy port
+    command: >
+      sh -c '
+        apk add --no-cache tinyproxy &&
+        tinyproxy -d -c /etc/tinyproxy/tinyproxy.conf
+      '
+    networks:
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8888"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ═══════════════════════════════════════════════════════════════
+  # DATABASE - Полностью изолирована, без доступа к интернету
+  # ═══════════════════════════════════════════════════════════════
+  db:
+    image: postgres:16-alpine
+    container_name: prime-db
+    restart: always
+    environment:
+      POSTGRES_DB: prime
+      POSTGRES_USER: ${DB_USER:-prime}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme-strong-password}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    networks:
+      - internal-net  # Только внутренняя сеть, NO internet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-prime}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+
+  # ═══════════════════════════════════════════════════════════════
+  # BACKEND API - Исходящие только через proxy
+  # ═══════════════════════════════════════════════════════════════
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.secure
+    container_name: prime-backend
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql+psycopg://${DB_USER:-prime}:${DB_PASSWORD:-changeme-strong-password}@db:5432/prime
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - APP_ENV=production
+      - APP_PORT=8000
+      - WORKERS=${WORKERS:-4}
+      # API Keys для AI провайдеров
+      - TELEGRAM_BOT_TOKENS=${TELEGRAM_BOT_TOKENS:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Egress proxy settings
+      - HTTP_PROXY=http://egress-proxy:8888
+      - HTTPS_PROXY=http://egress-proxy:8888
+      - NO_PROXY=localhost,127.0.0.1,db,backend,caddy,redis
+    networks:
+      - internal-net  # Для связи с DB
+      - proxy-net     # Для выхода через proxy
+    depends_on:
+      db:
+        condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=0
+
+  # ═══════════════════════════════════════════════════════════════
+  # BROWSER BRIDGE - Изолирован, выход только через proxy
+  # ═══════════════════════════════════════════════════════════════
+  browser-bridge:
+    build:
+      context: ./browser
+    container_name: prime-browser
+    restart: always
+    environment:
+      - BROWSER_BRIDGE_PORT=3001
+      # Egress proxy
+      - HTTP_PROXY=http://egress-proxy:8888
+      - HTTPS_PROXY=http://egress-proxy:8888
+      - NO_PROXY=localhost,127.0.0.1,backend
+    networks:
+      - internal-net
+      - proxy-net
+    depends_on:
+      - egress-proxy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ═══════════════════════════════════════════════════════════════
+  # CADDY - Публичный ingress, ограниченный egress
+  # ═══════════════════════════════════════════════════════════════
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: prime-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.secure:/etc/caddy/Caddyfile:ro
+      - ./install.sh:/srv/install.sh:ro
+      - ./prime:/srv/prime:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - EMAIL=${EMAIL:-admin@example.com}
+    networks:
+      - internal-net
+      - proxy-net
+      - public-net
+    depends_on:
+      - backend
+    # Caddy не должен иметь прямого доступа к интернету для egress
+    # Но нужен для получения HTTPS certificates
+    # Поэтому используем internal DNS resolver
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
+  # ═══════════════════════════════════════════════════════════════
+  # REDIS - Полностью изолирован
+  # ═══════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: prime-redis
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal-net  # NO internet access
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    profiles:
+      - redis
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ═══════════════════════════════════════════════════════════════
+  # MONITORING - Node Exporter (опционально)
+  # ═══════════════════════════════════════════════════════════════
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: prime-node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - internal-net
+    profiles:
+      - monitoring
+    security_opt:
+      - no-new-privileges:true
+
+# ═══════════════════════════════════════════════════════════════════
+# NETWORKS - Строгая изоляция
+# ═══════════════════════════════════════════════════════════════════
+networks:
+  # Внутренняя сеть - нет доступа к интернету
+  internal-net:
+    driver: bridge
+    internal: true  # <-- Ключевое: нет маршрута к интернету
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
+
+  # Сеть для proxy - контролируемый egress
+  proxy-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.2.0/24
+
+  # Публичная сеть только для Caddy
+  public-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.3.0/24
+
+# ═══════════════════════════════════════════════════════════════════
+# VOLUMES
+# ═══════════════════════════════════════════════════════════════════
+volumes:
+  pg_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  egress_logs:

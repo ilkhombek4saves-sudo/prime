@@ -35,6 +35,7 @@ from app.persistence.models import (
     UserRole,
 )
 from app.services.agent_runner import AgentRunner
+from app.services.agent_runner_async import get_agent_runner_async
 from app.services.binding_resolver import BindingResolver
 from app.services.dm_policy import DMPolicyService
 from app.services.event_bus import get_event_bus
@@ -917,27 +918,22 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
         "provider_type": str(getattr(provider_type, "value", provider_type)),
         "optimizer": optimization_plan.as_meta(),
     }
-    def _run_with_provider(ptype, pname, pconfig, *, model_override: str | None):
-        return _agent_runner.run_with_meta(
+
+    # Use async agent runner (non-blocking)
+    _agent_runner_async = get_agent_runner_async()
+
+    try:
+        run_result = await _agent_runner_async.run_with_meta(
             msg.text,
-            provider_type=ptype,
-            provider_name=pname,
-            provider_config=pconfig,
+            provider_type=provider_type,
+            provider_name=provider_name,
+            provider_config=provider_config,
             system=system,
             history=optimized_history,
             workspace_path=workspace_path if agent_code_exec else None,
             on_token=on_token if use_streaming else None,
-            # Don't blindly reuse a model picked for another provider (fallback case).
-            model=model_override,
+            model=selected_model,
             max_tokens=selected_max_tokens,
-        )
-
-    try:
-        run_result = await loop.run_in_executor(
-            None,
-            lambda: _run_with_provider(
-                provider_type, provider_name, provider_config, model_override=selected_model
-            ),
         )
         reply_text = run_result.text
         
@@ -949,7 +945,7 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
             run_result.model or selected_model,
             len(reply_text) if reply_text else 0
         )
-        
+
         if not reply_text:
             logger.warning(
                 "Empty text from provider agent=%s provider=%s model=%s",
@@ -993,11 +989,17 @@ async def _handle_message_inner(update: Update, context: ContextTypes.DEFAULT_TY
                 if candidate.name == provider_name:
                     continue
                 try:
-                    fallback_result = await loop.run_in_executor(
-                        None,
-                        lambda c=candidate: _run_with_provider(
-                            c.type, c.name, dict(c.config), model_override=None
-                        ),
+                    fallback_result = await _agent_runner_async.run_with_meta(
+                        msg.text,
+                        provider_type=candidate.type,
+                        provider_name=candidate.name,
+                        provider_config=dict(candidate.config),
+                        system=system,
+                        history=optimized_history,
+                        workspace_path=workspace_path if agent_code_exec else None,
+                        on_token=on_token if use_streaming else None,
+                        model=None,
+                        max_tokens=selected_max_tokens,
                     )
                     provider_name = candidate.name
                     provider_type = candidate.type

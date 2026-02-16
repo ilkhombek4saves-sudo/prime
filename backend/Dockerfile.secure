@@ -1,0 +1,123 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Prime Backend - Secure Production Build
+# С минимальными привилегиями и hardened конфигурацией
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Stage 1: Builder
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Устанавливаем только необходимые для сборки пакеты
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создаем виртуальное окружение
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Устанавливаем зависимости
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir \
+    fastapi>=0.115.0 \
+    uvicorn[standard]>=0.30.0 \
+    sqlalchemy>=2.0.0 \
+    psycopg>=3.0.0 \
+    pydantic>=2.0.0 \
+    pyyaml>=6.0.0 \
+    python-dotenv>=1.0.0 \
+    httpx>=0.27.0 \
+    aiohttp>=3.9.0 \
+    aiosqlite>=0.20.0 \
+    python-jose[cryptography]>=3.3.0 \
+    passlib[bcrypt]>=1.7.0 \
+    python-multipart>=0.0.6 \
+    prometheus-client>=0.17.0 \
+    bcrypt>=4.0.0
+
+# Stage 2: Production - Minimal образ
+FROM python:3.11-slim
+
+# Метаданные
+LABEL maintainer="Prime AI Agent" \
+      description="Secure Prime Backend" \
+      version="2.0"
+
+WORKDIR /app
+
+# Устанавливаем только runtime зависимости
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && apt-get autoclean
+
+# Обновляем CA certificates
+RUN update-ca-certificates
+
+# Копируем виртуальное окружение из builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Копируем приложение
+COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+
+# Создаем непривилегированного пользователя
+RUN groupadd --gid 1000 prime && \
+    useradd --uid 1000 --gid prime --shell /bin/false \
+    --home-dir /app --create-home prime
+
+# Создаем директории для логов и временных файлов
+RUN mkdir -p /app/logs /app/tmp /app/config && \
+    chown -R prime:prime /app
+
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # Security headers
+    UVICORN_SERVER_HEADER=0 \
+    UVICORN_DATE_HEADER=0 \
+    # Python security
+    PYTHONHTTPSVERIFY=1 \
+    # Uvicorn settings
+    UVICORN_FORWARDED_ALLOW_IPS=*
+
+# Отключаем Python bytecode и buffering для безопасности
+RUN chmod -R 755 /app
+
+# Переключаемся на непривилегированного пользователя
+USER prime
+
+# Health check (от имени пользователя prime)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/api/healthz || exit 1
+
+# Открываем только необходимый порт
+EXPOSE 8000
+
+# Запускаем с ограниченными возможностями
+# --loop uvloop - быстрый event loop
+# --http h11 - безопасный HTTP parser
+# --proxy-headers - доверяем заголовкам от Caddy
+# --forwarded-allow-ips '*' - разрешаем от всех (Caddy фильтрует)
+CMD exec uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers ${WORKERS:-4} \
+    --loop uvloop \
+    --http h11 \
+    --proxy-headers \
+    --forwarded-allow-ips '*' \
+    --server-header 0 \
+    --date-header 0 \
+    --access-log 0

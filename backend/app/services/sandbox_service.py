@@ -1,168 +1,246 @@
 """
-SandboxService — Docker-based code execution sandbox.
+SandboxService — secure command execution in Docker containers.
 
-Requires: pip install docker>=7.0
-Docker socket must be mounted: /var/run/docker.sock:/var/run/docker.sock
+Replaces direct subprocess calls with isolated container execution.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import tempfile
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from pathlib import Path
+from typing import Any
+
+import docker
+from docker.errors import DockerException, ImageNotFound
 
 logger = logging.getLogger(__name__)
 
-SANDBOX_IMAGE = "python:3.12-slim"
-SANDBOX_PREFIX = "prime-sandbox-"
-SANDBOX_MEMORY = "512m"
-SANDBOX_CPUS = 0.5
-SANDBOX_TIMEOUT = 60
+DEFAULT_SANDBOX_IMAGE = "alpine:latest"
+DEFAULT_TIMEOUT = 60
+DEFAULT_MEMORY_LIMIT = "512m"
+DEFAULT_CPU_LIMIT = "1.0"
 
 
-def _get_docker_client():
-    try:
-        import docker
-        return docker.from_env()
-    except ImportError:
-        raise RuntimeError("docker package not installed. Run: pip install docker>=7.0")
-    except Exception as exc:
-        raise RuntimeError(f"Cannot connect to Docker: {exc}") from exc
+class SandboxError(Exception):
+    """Sandbox execution error."""
+    pass
 
 
 class SandboxService:
-    """Manage isolated Docker containers for agent code execution."""
+    """Execute commands in isolated Docker containers."""
 
-    @staticmethod
-    def create_sandbox(
-        session_id: str | None = None,
-        workspace_path: str | None = None,
-    ) -> str:
+    _client: docker.DockerClient | None = None
+
+    @classmethod
+    def _get_client(cls) -> docker.DockerClient:
+        if cls._client is None:
+            try:
+                cls._client = docker.from_env()
+            except DockerException as e:
+                raise SandboxError(f"Docker not available: {e}") from e
+        return cls._client
+
+    @classmethod
+    async def run_command(
+        cls,
+        command: str | list[str],
+        *,
+        working_dir: str | None = None,
+        timeout: int = DEFAULT_TIMEOUT,
+        memory_limit: str = DEFAULT_MEMORY_LIMIT,
+        cpu_limit: str = DEFAULT_CPU_LIMIT,
+        env_vars: dict[str, str] | None = None,
+        network_mode: str = "none",  # No network by default for security
+        allow_network: bool = False,
+    ) -> dict[str, Any]:
         """
-        Create and start a sandbox container.
-        Returns container_id.
+        Execute a command in a sandboxed Docker container.
+
+        Args:
+            command: Shell command or list of command arguments
+            working_dir: Host directory to mount as /workspace
+            timeout: Maximum execution time in seconds
+            memory_limit: Memory limit (e.g., '512m', '1g')
+            cpu_limit: CPU limit (e.g., '1.0', '0.5')
+            env_vars: Environment variables to set
+            network_mode: Docker network mode
+            allow_network: If True, allow network access (use with caution)
+
+        Returns:
+            Dict with stdout, stderr, exit_code, and duration_ms
         """
-        client = _get_docker_client()
-        container_name = f"{SANDBOX_PREFIX}{uuid.uuid4().hex[:8]}"
+        client = cls._get_client()
+        container_name = f"prime-sandbox-{uuid.uuid4().hex[:12]}"
 
-        volumes: dict = {}
-        if workspace_path:
-            volumes[workspace_path] = {"bind": "/workspace", "mode": "rw"}
+        # Ensure sandbox image exists
+        try:
+            client.images.get(DEFAULT_SANDBOX_IMAGE)
+        except ImageNotFound:
+            logger.info("Pulling sandbox image %s...", DEFAULT_SANDBOX_IMAGE)
+            try:
+                client.images.pull(DEFAULT_SANDBOX_IMAGE)
+            except DockerException as e:
+                raise SandboxError(f"Failed to pull sandbox image: {e}") from e
 
-        container = client.containers.run(
-            SANDBOX_IMAGE,
-            command="sleep infinity",
-            name=container_name,
-            detach=True,
-            remove=True,
-            mem_limit=SANDBOX_MEMORY,
-            nano_cpus=int(SANDBOX_CPUS * 1e9),
-            network_mode="none",
-            security_opt=["no-new-privileges"],
-            volumes=volumes,
+        # Prepare command
+        if isinstance(command, list):
+            cmd = command
+        else:
+            cmd = ["sh", "-c", command]
+
+        # Prepare volumes
+        volumes = {}
+        if working_dir and os.path.isdir(working_dir):
+            volumes[os.path.abspath(working_dir)] = {
+                "bind": "/workspace",
+                "mode": "rw",
+            }
+
+        # Environment variables
+        environment = dict(env_vars or {})
+        environment["HOME"] = "/tmp"
+        environment["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        # Network mode
+        actual_network = "bridge" if allow_network else network_mode
+
+        logger.info(
+            "Sandbox: running command in container %s (timeout=%ds, mem=%s, cpu=%s, network=%s)",
+            container_name,
+            timeout,
+            memory_limit,
+            cpu_limit,
+            actual_network,
         )
-        logger.info("Sandbox created: %s (session=%s)", container.id[:12], session_id)
 
-        # Persist to DB (best-effort)
+        container = None
+        start_time = asyncio.get_event_loop().time()
+
         try:
-            SandboxService._persist(session_id, container.id)
-        except Exception as exc:
-            logger.debug("Sandbox DB persist failed: %s", exc)
-
-        return container.id
-
-    @staticmethod
-    def exec_in_sandbox(
-        container_id: str,
-        command: str,
-        timeout: int = SANDBOX_TIMEOUT,
-    ) -> tuple[str, str, int]:
-        """
-        Execute a shell command inside the sandbox.
-        Returns (stdout, stderr, exit_code).
-        """
-        client = _get_docker_client()
-        try:
-            container = client.containers.get(container_id)
-            exit_code, output = container.exec_run(
-                ["sh", "-c", command],
+            # Run container with resource limits
+            container = client.containers.run(
+                DEFAULT_SANDBOX_IMAGE,
+                cmd,
+                name=container_name,
+                volumes=volumes,
+                environment=environment,
+                network_mode=actual_network,
+                mem_limit=memory_limit,
+                cpu_quota=int(float(cpu_limit) * 100000),  # Convert to microseconds
+                cpu_period=100000,
+                detach=True,
                 stdout=True,
                 stderr=True,
-                demux=True,
-                environment={"PYTHONUNBUFFERED": "1"},
+                working_dir="/workspace" if working_dir else "/tmp",
+                # Security options
+                security_opt=["no-new-privileges:true"],
+                cap_drop=["ALL"],
+                read_only=False,  # Allow writing to /tmp and /workspace
             )
-            stdout_bytes, stderr_bytes = output if isinstance(output, tuple) else (output, b"")
-            stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
-            stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
-            return stdout, stderr, exit_code
-        except Exception as exc:
-            return "", str(exc), 1
 
-    @staticmethod
-    def destroy_sandbox(container_id: str) -> None:
-        """Stop and remove the sandbox container."""
-        client = _get_docker_client()
-        try:
-            container = client.containers.get(container_id)
-            container.stop(timeout=5)
-            logger.info("Sandbox destroyed: %s", container_id[:12])
-        except Exception as exc:
-            logger.warning("Sandbox destroy error: %s", exc)
-
-        # Update DB (best-effort)
-        try:
-            SandboxService._update_status(container_id, "stopped")
-        except Exception:
-            pass
-
-    @staticmethod
-    def cleanup_orphans() -> int:
-        """Remove stale prime-sandbox-* containers. Returns count removed."""
-        client = _get_docker_client()
-        removed = 0
-        try:
-            containers = client.containers.list(
-                filters={"name": SANDBOX_PREFIX, "status": "running"}
-            )
-            for c in containers:
+            # Wait for completion with timeout
+            loop = asyncio.get_event_loop()
+            try:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, container.wait),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Sandbox: command timed out after %ds", timeout)
                 try:
-                    c.stop(timeout=3)
-                    removed += 1
-                    logger.info("Orphan sandbox removed: %s", c.id[:12])
+                    container.kill()
                 except Exception:
                     pass
-        except Exception as exc:
-            logger.warning("Cleanup orphans error: %s", exc)
-        return removed
+                raise SandboxError(f"Command timed out after {timeout} seconds")
 
-    # ── DB helpers ─────────────────────────────────────────────────────────────
+            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+            exit_code = result.get("StatusCode", -1)
 
-    @staticmethod
-    def _persist(session_id: str | None, container_id: str) -> None:
-        from app.persistence.database import SyncSessionLocal
-        from app.persistence.models import SandboxSession
-        import uuid as _uuid
+            # Get logs
+            logs = await loop.run_in_executor(None, container.logs, True, True)
+            logs_str = logs.decode("utf-8", errors="replace") if logs else ""
 
-        with SyncSessionLocal() as db:
-            record = SandboxSession(
-                session_id=_uuid.UUID(session_id) if session_id else None,
-                container_id=container_id,
-            )
-            db.add(record)
-            db.commit()
+            # Split stdout/stderr (Docker combines them)
+            stdout = logs_str
+            stderr = ""
 
-    @staticmethod
-    def _update_status(container_id: str, status: str) -> None:
-        from app.persistence.database import SyncSessionLocal
-        from app.persistence.models import SandboxSession, SandboxStatus
-        from sqlalchemy import select
+            return {
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "container_name": container_name,
+            }
 
-        with SyncSessionLocal() as db:
-            result = db.execute(
-                select(SandboxSession).where(SandboxSession.container_id == container_id)
-            )
-            rec = result.scalar_one_or_none()
-            if rec:
-                rec.status = SandboxStatus(status)
-                rec.stopped_at = datetime.now(timezone.utc)
-                db.commit()
+        except DockerException as e:
+            raise SandboxError(f"Docker execution failed: {e}") from e
+
+        finally:
+            # Cleanup container
+            if container:
+                try:
+                    container.remove(force=True)
+                except Exception as e:
+                    logger.warning("Failed to remove sandbox container: %s", e)
+
+    @classmethod
+    def validate_command(cls, command: str, allowed_patterns: list[str] | None = None) -> bool:
+        """
+        Validate that a command matches allowed patterns.
+
+        Args:
+            command: The command string to validate
+            allowed_patterns: List of allowed command patterns (regex or substring)
+
+        Returns:
+            True if command is allowed
+        """
+        import re
+
+        if allowed_patterns is None:
+            # Default: allow common safe commands
+            allowed_patterns = [
+                r"^python[3]?\s+-m\s+(pytest|unittest|pip|black|ruff|mypy)",
+                r"^(pip|npm|yarn|cargo|go)\s+(install|build|test|run|lint)",
+                r"^(git|ls|cat|echo|head|tail|wc|grep|find|mkdir|touch|cp|mv|rm|rmdir)\s",
+                r"^(curl|wget)\s+(-[A-Za-z]+\s+)*https?://",
+                r"^(docker-compose|docker)\s+(ps|logs|build|up|down|exec|run)\s",
+                r"^(make|cmake|gradle|mvn)\s",
+                r"^(pytest|test|lint|format|build|install)\s",
+            ]
+
+        for pattern in allowed_patterns:
+            if re.search(pattern, command, re.IGNORECASE):
+                return True
+
+        return False
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Check if Docker sandbox is available."""
+        try:
+            client = cls._get_client()
+            client.ping()
+            return True
+        except Exception:
+            return False
+
+
+# Convenience function for direct use
+def run_sandboxed(
+    command: str | list[str],
+    working_dir: str | None = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """
+    Run a command in sandbox (sync wrapper for convenience).
+    
+    For async usage, use SandboxService.run_command()
+    """
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(
+        SandboxService.run_command(command, working_dir=working_dir, **kwargs)
+    )

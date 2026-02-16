@@ -207,6 +207,15 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # pragma: no cover
             logger.warning("Worker stop error: %s", exc)
 
+    # Close async agent runner HTTP client
+    try:
+        from app.services.agent_runner_async import get_agent_runner_async
+        runner = get_agent_runner_async()
+        await runner.close()
+        logger.info("Agent runner closed")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Agent runner close error: %s", exc)
+
     if lock_file is not None:
         try:
             lock_file.close()

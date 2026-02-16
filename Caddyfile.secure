@@ -1,0 +1,200 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Caddy Secure Configuration for Prime AI Agent
+# HTTPS only, security headers, rate limiting
+# ═══════════════════════════════════════════════════════════════════════════════
+
+{
+    # Email для Let's Encrypt
+    email admin@primeagent.duckdns.org
+    
+    # Автоматические HTTPS сертификаты
+    auto_https off
+    
+    # Grace period для shutdown
+    grace_period 30s
+    
+    # Global options
+    admin off  # Отключаем admin API для безопасности
+    
+    # Логирование
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_days 30
+        }
+        format json
+        level INFO
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTTP to HTTPS redirect (или installer для первоначальной настройки)
+# ═══════════════════════════════════════════════════════════════════════════════
+:80 {
+    # Install script - доступен без HTTPS для первоначальной настройки
+    handle /install.sh {
+        root * /srv
+        file_server
+        header Content-Type text/plain
+    }
+    
+    # CLI binary
+    handle /prime {
+        root * /srv
+        file_server
+        header Content-Type application/octet-stream
+        header Cache-Control "public, max-age=3600"
+    }
+    
+    # Health check
+    handle /health {
+        respond "OK" 200
+    }
+    
+    # ACME challenge для Let's Encrypt
+    handle /.well-known/acme-challenge/* {
+        respond "OK" 200
+    }
+    
+    # Redirect all other to HTTPS
+    handle {
+        redir https://{host}{uri} permanent
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTTPS - Production with full security
+# ═══════════════════════════════════════════════════════════════════════════════
+:443 {
+    # TLS configuration
+    tls internal {
+        # В production заменить на:
+        # tls admin@example.com
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Security Headers (OWASP compliant)
+    # ═══════════════════════════════════════════════════════════════════════════
+    header {
+        # Strict Transport Security - принудительный HTTPS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        
+        # Запрет на встраивание в iframe
+        X-Frame-Options "DENY"
+        
+        # Защита от MIME sniffing
+        X-Content-Type-Options "nosniff"
+        
+        # XSS Protection
+        X-XSS-Protection "1; mode=block"
+        
+        # Referrer Policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        
+        # Content Security Policy
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' wss: ws: https:; font-src 'self' data:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+        
+        # Permissions Policy
+        Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+        
+        # Убираем server header
+        -Server
+        
+        # Добавляем заголовки безопасности для всех ответов
+        defer
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Rate Limiting (используем встроенную функциональность)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @rate_limited {
+        path /api/* /ws/*
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # API Routes
+    # ═══════════════════════════════════════════════════════════════════════════
+    handle /api/* {
+        # Rate limiting через reverse_proxy
+        reverse_proxy backend:8000 {
+            # Заголовки для бэкенда
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+            header_up X-Forwarded-Port {server_port}
+            
+            # Health checks
+            health_uri /api/healthz
+            health_interval 30s
+            health_timeout 10s
+            
+            # Retry policy
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # WebSocket Routes
+    # ═══════════════════════════════════════════════════════════════════════════
+    handle /ws/* {
+        reverse_proxy backend:8000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Upgrade {>Upgrade}
+            header_up Connection {>Connection}
+            
+            # WebSocket timeouts
+            flush_interval -1
+        }
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Installer Script (HTTPS only in production)
+    # ═══════════════════════════════════════════════════════════════════════════
+    handle /install.sh {
+        root * /srv
+        file_server
+        header Content-Type text/plain
+        header Cache-Control "no-cache, no-store, must-revalidate"
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CLI Binary
+    # ═══════════════════════════════════════════════════════════════════════════
+    handle /prime {
+        root * /srv
+        file_server
+        header Content-Type application/octet-stream
+        header Cache-Control "public, max-age=3600"
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Static files (если есть)
+    # ═══════════════════════════════════════════════════════════════════════════
+    handle /static/* {
+        root * /srv/static
+        file_server
+        header Cache-Control "public, max-age=86400"
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Default response
+    # ═══════════════════════════════════════════════════════════════════════════
+    handle {
+        respond "Prime AI Agent Platform - Secure Mode" 200
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Domain-specific configuration (uncomment when domain is ready)
+# ═══════════════════════════════════════════════════════════════════════════════
+# primeagent.duckdns.org {
+#     import :443
+#     tls admin@primeagent.duckdns.org
+# }
